@@ -131,7 +131,7 @@ const APIS={
   alphav:{id:'alphav',name:'Alpha Vantage',desc:'미국 주가 데이터',icon:'🇺🇸',color:'#00B0FF',bg:'rgba(0,176,255,',model:''},
 };
 
-const TABS=[{id:'home',ic:'📊',lb:'홈'},{id:'scan',ic:'🔍',lb:'스캔'},{id:'port',ic:'💼',lb:'포폴'},{id:'bt',ic:'📈',lb:'백테'},{id:'log',ic:'📋',lb:'기록'},{id:'ai',ic:'⚡',lb:'명령'},{id:'set',ic:'⚙️',lb:'설정'}];
+const TABS=[{id:'home',ic:'📊',lb:'홈'},{id:'scan',ic:'🔍',lb:'스캔'},{id:'bt',ic:'📈',lb:'백테'},{id:'log',ic:'📋',lb:'기록'},{id:'ai',ic:'⚡',lb:'명령'},{id:'set',ic:'⚙️',lb:'설정'}];
 
 // ============================================================
 // 신호를 쉬운 말로 변환하는 매핑
@@ -174,16 +174,10 @@ let S={
   tab:'home',fil:'all',sk:'chg',sd:'desc',sel:null,
   aiMsgs:[],aiMode:'multi',loading:false,
   keys:{claude:'',gemini:'',gpt:'',perplexity:'',kis:'',kis_secret:'',alphav:''},
-  on:{claude:false,gemini:true,gpt:false,perplexity:false,kis:false,alphav:false},
+  on:{claude:true,gemini:true,gpt:false,perplexity:true,kis:false,alphav:false},
   theme:'dark',
-  portfolio:[
-    {n:'삼성전자',c:'005930',m:'KR',qty:50,avg:72000,cc:'₩'},
-    {n:'NVIDIA',c:'NVDA',m:'US',qty:10,avg:680,cc:'$'},
-    {n:'에코프로비엠',c:'247540',m:'KR',qty:20,avg:185000,cc:'₩'},
-    {n:'Apple',c:'AAPL',m:'US',qty:15,avg:195,cc:'$'},
-    {n:'SK하이닉스',c:'000660',m:'KR',qty:30,avg:168000,cc:'₩'},
-  ],
-  cash:15420000,tradeLog:[],alerts:[],showModal:null,btStrat:'golden',logFilter:'all'
+  portfolio:[],
+  cash:0,tradeLog:[],alerts:[],showModal:null,btStrat:'golden',logFilter:'all'
 };
 
 try{const sv=JSON.parse(localStorage.getItem('alpha_v3'));if(sv){Object.keys(sv).forEach(k=>{if(S.hasOwnProperty(k))S[k]=sv[k];});}}catch(e){}
@@ -396,23 +390,50 @@ async function doAi(){
   const ctx=buildCtx(msg||'이 이미지를 분석하고 매수/매도/홀딩 중 단 하나만 판단해라.');
   const results=await Promise.allSettled(active.map(id=>callAPI(id,ctx,imgForSend)));
 
-  results.forEach((res,i)=>{S.aiMsgs.push({r:active[i],t:res.status==='fulfilled'?res.value:'❌ 오류'});});
+  // 각 AI 응답 수집 (개별 표시 없이 내부 분석용)
+  const aiResults=[];
+  results.forEach((res,i)=>{
+    const txt=res.status==='fulfilled'?res.value:'❌ 오류';
+    aiResults.push({id:active[i],txt});
+  });
 
-  if(active.length>=2){
-    let buyCount=0,sellCount=0;
-    results.forEach(res=>{
-      if(res.status!=='fulfilled')return;
-      const t=res.value;
-      if(/사라|buy|진입|강력매수|매수/i.test(t))buyCount++;
-      if(/팔아|sell|손절|CUT|강력매도|매도/i.test(t))sellCount++;
+  // 3개 AI 조율 → 단일 최선 추천
+  if(aiResults.length>=2){
+    let buyVotes=[],sellVotes=[],holdVotes=[];
+    aiResults.forEach(r=>{
+      if(r.txt.startsWith('❌'))return;
+      const t=r.txt;
+      const name=APIS[r.id]?APIS[r.id].name:r.id;
+      if(/사라|buy|진입|강력매수|매수/i.test(t))buyVotes.push({name,txt:t});
+      else if(/팔아|sell|손절|CUT|강력매도|매도/i.test(t))sellVotes.push({name,txt:t});
+      else holdVotes.push({name,txt:t});
     });
-    const total=active.length;let vd='';
-    if(buyCount===total)vd=`🟢 전원 일치! 지금 사세요`;
-    else if(sellCount===total)vd=`🔴 전원 일치! 지금 파세요`;
-    else if(buyCount>sellCount)vd=`🟢 ${buyCount}/${total} 사라고 해요`;
-    else if(sellCount>buyCount)vd=`🔴 ${sellCount}/${total} 팔라고 해요`;
-    else vd=`🟡 의견이 갈려요, 기다리세요`;
-    S.aiMsgs.push({r:'verdict',t:`📊 최종 명령: ${vd}`});
+    const total=buyVotes.length+sellVotes.length+holdVotes.length;
+    let action='',icon='',color='',bestTxt='';
+    if(buyVotes.length>sellVotes.length&&buyVotes.length>=holdVotes.length){
+      action='사세요';icon='🟢';color='var(--gn)';bestTxt=buyVotes[0]?buyVotes[0].txt:'';
+    }else if(sellVotes.length>buyVotes.length&&sellVotes.length>=holdVotes.length){
+      action='파세요';icon='🔴';color='var(--rd)';bestTxt=sellVotes[0]?sellVotes[0].txt:'';
+    }else{
+      action='기다리세요';icon='🟡';color='var(--yl)';bestTxt=holdVotes[0]?holdVotes[0].txt:(aiResults[0]?aiResults[0].txt:'');
+    }
+    const agree=buyVotes.length===total?'전원 일치':sellVotes.length===total?'전원 일치':holdVotes.length===total?'전원 일치':`${Math.max(buyVotes.length,sellVotes.length,holdVotes.length)}/${total} 동의`;
+    // 핵심 근거 추출 (가장 긴 답변에서)
+    const allTxts=aiResults.filter(r=>!r.txt.startsWith('❌')).map(r=>r.txt);
+    const longestTxt=allTxts.sort((a,b)=>b.length-a.length)[0]||'';
+    // 종목명/목표가 추출
+    const tickerMatch=longestTxt.match(/🎯\s*(.+?)[\n\r]/)||longestTxt.match(/([가-힣]+(?:전자|하이닉스|바이오|SDI|물산|화학|생명|건설|증권|보험|은행|카드))/);
+    const targetMatch=longestTxt.match(/목표.*?(\d[\d,.]+)/)||longestTxt.match(/💰\s*(\d[\d,.]+)/);
+    let verdict=`${icon} **${action}** (${agree})\n\n`;
+    if(tickerMatch)verdict+=`🎯 ${tickerMatch[1].trim()}\n`;
+    verdict+=`👉 ${action}\n`;
+    if(targetMatch)verdict+=`💰 목표가: ${targetMatch[1]}\n`;
+    verdict+=`\n📝 ${bestTxt.replace(/🎯|👉|💰|📝|🟢|🔴|🟡/g,'').trim().substring(0,200)}`;
+    S.aiMsgs.push({r:'verdict',t:verdict});
+  }else if(aiResults.length===1&&!aiResults[0].txt.startsWith('❌')){
+    S.aiMsgs.push({r:'verdict',t:aiResults[0].txt});
+  }else{
+    aiResults.forEach(r=>S.aiMsgs.push({r:r.id,t:r.txt}));
   }
   S.loading=false;save();render();
 }
@@ -504,19 +525,7 @@ function render(){
     }
   }
 
-  // ==================== PORTFOLIO ====================
-  if(S.tab==='port'){
-    h+=`<div class="sg"><div class="sc"><div class="lb">평가(원화)</div><div class="big" style="font-size:17px">₩${F(tv)}</div></div><div class="sc"><div class="lb">세후수익률</div><div class="big ${CC(tnp)}" style="font-size:17px">${SN(+tpct)}${tpct}%</div></div></div>`;
-    const cols=['#00E676','#00B0FF','#FF6D00','#E040FB','#FFD600'];
-    h+=`<div class="cd"><div class="ct">자산배분</div><div class="ab"><div class="as" style="width:${((S.cash/(S.cash+tv))*100).toFixed(0)}%;background:rgba(128,128,128,.15)">현금</div>`;
-    pl.forEach((p,i)=>{const pct=((p.krw/(S.cash+tv))*100);h+=`<div class="as" style="width:${pct}%;background:${cols[i%5]}30;color:${cols[i%5]}">${pct>5?p.n.slice(0,3):''}</div>`;});
-    h+=`</div></div>`;
-    pl.forEach((p,i)=>{const pn=+p.pct;let vd='🟡 갖고있기';if(pn>10)vd='🟢 많이 올랐어요! 절반 파세요';else if(pn>5)vd='🟢 좋아요, 팔까 고민해보세요';if(pn<-2)vd='🟡 조금 떨어졌어요';if(pn<-3)vd='🔴 -3% 넘었어요! 팔아야해요';
-    h+=`<div class="cd"><div style="display:flex;justify-content:space-between;margin-bottom:4px"><div><span style="font-weight:800;font-size:13px">${p.n}</span><span class="rs" style="margin-left:5px">${p.c}</span></div><div style="font-weight:900;font-size:15px" class="${CC(pn)}">${SN(pn)}${p.pct}%</div></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px;font-size:10px;color:var(--tx2);margin-bottom:5px"><div>${p.qty}주 · 산 가격 ${p.cc}${F(p.avg)}</div><div>지금 ${p.cc}${F(p.cp)}</div><div class="${CC(p.pnl.net)}">세금 떼고 ${p.cc}${F(p.pnl.net)}</div><div>세금 ${F(p.pnl.tx)} 수수료 ${F(p.pnl.fe)}</div>${p.m==='US'?`<div>원화로 ₩${F(p.krw)}</div>`:''}</div>
-    <div style="display:flex;justify-content:space-between;align-items:center"><div class="vd">${vd}</div><button style="font-size:9px;color:var(--rd);background:none;border:1px solid rgba(255,23,68,.15);border-radius:5px;padding:2px 6px;cursor:pointer" onclick="if(confirm('삭제?')){S.portfolio.splice(${i},1);save();render()}">삭제</button></div></div>`;});
-    h+=`<button style="width:100%;padding:10px;border-radius:9px;border:1px dashed var(--bd);background:transparent;color:var(--gn);font-weight:700;font-size:12px;cursor:pointer" onclick="S.showModal='add';render()">+ 종목 추가</button>`;
-  }
+  // ==================== PORTFOLIO (제거됨 - 실전 데이터 없음) ====================
 
   // ==================== BACKTEST ====================
   if(S.tab==='bt'){
@@ -627,21 +636,26 @@ function render(){
     S.aiMsgs.forEach(m=>{
       let cls='ms';if(m.r==='u')cls='mu';else if(m.r==='claude')cls='mc';else if(m.r==='gemini')cls='mg2';else if(m.r==='gpt')cls='mgpt';else if(m.r==='perplexity')cls='mpx';else if(m.r==='verdict')cls='mv';
       const api=APIS[m.r];const tgC=api?api.color:m.r==='verdict'?'var(--yl)':'var(--gn)';
-      const tgL=api?api.name:m.r==='verdict'?'최종 명령':'SYSTEM';
+      const tgL=api?api.name:m.r==='verdict'?'🤖 AI 종합 판단':'SYSTEM';
 
-      // AI 응답이면 파싱 시도
-      if(m.r!=='u'&&m.r!=='verdict'&&m.r!=='sys'){
-        const parsed=parseAiResponse(m.t);
-        if(parsed.parsed){
-          const cardCls=parsed.actType==='buy'?'buy-card':parsed.actType==='sell'?'sell-card':'wait-card';
-          h+=`<div class="mg ${cls}"><div class="tg" style="color:${tgC}">${tgL}</div><div class="ai-card ${cardCls}">`;
-          h+=`<div class="ai-target">🎯 ${E(parsed.target)}</div>`;
-          h+=`<div class="ai-action">👉 ${E(parsed.action)}</div>`;
-          if(parsed.price)h+=`<div class="ai-price">💰 ${E(parsed.price)}</div>`;
-          if(parsed.reason)h+=`<div class="ai-reason">📝 ${E(parsed.reason)}</div>`;
-          h+=`</div></div>`;
-          return;
-        }
+      // 개별 AI 응답은 숨기고 verdict(종합판단)만 표시
+      if(m.r!=='u'&&m.r!=='verdict'&&m.r!=='sys')return;
+
+      // verdict는 크게 보이게
+      if(m.r==='verdict'){
+        const lines=m.t.split('\n').filter(l=>l.trim());
+        h+=`<div class="mg mv" style="background:rgba(255,214,0,.06);border:1px solid rgba(255,214,0,.15);padding:12px;border-radius:10px"><div class="tg" style="color:var(--yl);font-size:11px;margin-bottom:6px">${tgL}</div>`;
+        lines.forEach(line=>{
+          line=line.replace(/\*\*/g,'');
+          if(/^🟢|^🔴|^🟡/.test(line))h+=`<div style="font-size:16px;font-weight:900;margin-bottom:8px">${E(line)}</div>`;
+          else if(/^🎯/.test(line))h+=`<div style="font-size:13px;font-weight:700;color:var(--gn);margin-bottom:4px">${E(line)}</div>`;
+          else if(/^👉/.test(line))h+=`<div style="font-size:14px;font-weight:800;margin-bottom:4px">${E(line)}</div>`;
+          else if(/^💰/.test(line))h+=`<div style="font-size:12px;color:var(--yl);margin-bottom:4px">${E(line)}</div>`;
+          else if(/^📝/.test(line))h+=`<div style="font-size:11px;color:var(--tx2);line-height:1.6">${E(line)}</div>`;
+          else if(line.trim())h+=`<div style="font-size:11px;color:var(--tx2)">${E(line)}</div>`;
+        });
+        h+=`</div>`;
+        return;
       }
       h+=`<div class="mg ${cls}">${m.r!=='u'?`<div class="tg" style="color:${tgC}">${tgL}</div>`:''}${m.img?'📷 ':''}${E(m.t)}</div>`;
     });
