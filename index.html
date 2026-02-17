@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>ALPHA ENGINE v5.1 - 주식 투자 도우미</title>
+<title>ALPHA ENGINE v5.7 - 주식 투자 도우미</title>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -1205,10 +1205,11 @@ textarea.input-field { resize: vertical; min-height: 60px; }
 
     <div class="api-card">
       <div class="api-header">
-        <span class="api-name">🟢 GPT (3중 교차검증)</span>
-        <div class="toggle" id="toggleGPT" onclick="toggleAPI('gpt')"></div>
+        <span class="api-name">🟢 Groq - Llama 3.1 (무료 3중 교차검증)</span>
+        <div class="toggle" id="toggleGroq" onclick="toggleAPI('groq')"></div>
       </div>
-      <input type="password" class="api-key-input" id="keyGPT" placeholder="GPT API 키 입력" onchange="saveAPIKey('gpt')">
+      <input type="password" class="api-key-input" id="keyGroq" placeholder="console.groq.com 무료 가입 후 API 키 입력" onchange="saveAPIKey('groq')">
+      <div style="font-size:10px;color:var(--green);margin-top:4px;padding:0 4px">✅ 완전 무료 | console.groq.com → API Keys → Create</div>
     </div>
 
     <div class="api-card">
@@ -1221,18 +1222,19 @@ textarea.input-field { resize: vertical; min-height: 60px; }
 
     <div class="api-card">
       <div class="api-header">
-        <span class="api-name">🇰🇷 한국투자증권 (한국 주가)</span>
-        <div class="toggle" id="toggleKIS" onclick="toggleAPI('kis')"></div>
+        <span class="api-name">🇺🇸 Alpha Vantage (미국 주가 · 무료)</span>
+        <div class="toggle" id="toggleAlpha" onclick="toggleAPI('alpha')"></div>
       </div>
-      <input type="password" class="api-key-input" id="keyKIS" placeholder="앱키 입력 (서버 구축 시 연동)" onchange="saveAPIKey('kis')">
+      <input type="password" class="api-key-input" id="keyAlpha" placeholder="Alpha Vantage API 키 입력" onchange="saveAPIKey('alpha')">
+      <div style="font-size:10px;color:var(--green);margin-top:4px;padding:0 4px">✅ 무료 (분당 5회) | alphavantage.co → Get Free API Key</div>
     </div>
 
     <div class="api-card">
       <div class="api-header">
-        <span class="api-name">🇺🇸 Alpha Vantage (미국 주가)</span>
-        <div class="toggle" id="toggleAlpha" onclick="toggleAPI('alpha')"></div>
+        <span class="api-name">🇰🇷 한국 주가 (다음·네이버 금융 · 무료)</span>
+        <div class="toggle active" id="toggleKR" style="pointer-events:none"></div>
       </div>
-      <input type="password" class="api-key-input" id="keyAlpha" placeholder="Alpha Vantage API 키 입력" onchange="saveAPIKey('alpha')">
+      <div style="font-size:10px;color:var(--green);padding:4px">✅ API 키 불필요 · 항상 무료 자동 연동</div>
     </div>
   </div>
 
@@ -1406,8 +1408,8 @@ const FEE_US = 0.0007;
 // ==================== STATE ====================
 let state = {
   theme: 'dark',
-  apis: { claude:false, gemini:false, gpt:false, perplexity:false, kis:false, alpha:false },
-  apiKeys: { claude:'', gemini:'', gpt:'', perplexity:'', kis:'', alpha:'' },
+  apis: { claude:false, gemini:false, groq:false, perplexity:false, alpha:false },
+  apiKeys: { claude:'', gemini:'', groq:'', perplexity:'', alpha:'' },
   portfolio: [],
   records: [],
   chatHistory: [],
@@ -1449,9 +1451,9 @@ function loadState() {
       gemini: ['AIza','SyCs','7QZe','q1xk','b6VG','j0iw','tcYz','r7C_','jElv','NXg'].join(''),
       perplexity: ['pplx-','DODV8cq9BuQG','i5slSkKkVQf9','fthREzsYH4cl','RYaBkeoOdKjw'].join(''),
       alpha: '8CEA89VHHEZIOWQY',
-      claude: ['sk-ant-api03-pZS0ER_OL16UaThtXQk0x1','oBT_Hk8XsY8i6WBRbBYh3m1c6rYR6ruu5XwDXEjKSS','DeaGOOe-6xoXugIBKW-HcQ-b4zlwgAA'].join('')
+      claude: ['sk-ant-api03-pZS0ER_OL16UaThtXQk0x1','oBT_Hk8XsY8i6WBRbBYh3m1c6rYR6ruu5XwDXEjKSS','DeaGOOe-6xoXugIBKW-HcQ-b4zlwgAA'].join(''),
     };
-    const apiDefaults = { gemini:true, perplexity:true, gpt:false, claude:true, alpha:true, kis:true };
+    const apiDefaults = { gemini:true, perplexity:true, groq:false, claude:true, alpha:true };
     let injected = [];
     for (const [k,v] of Object.entries(keyDefaults)) {
       if (!state.apiKeys[k]) { state.apiKeys[k] = v; injected.push(k); }
@@ -2007,7 +2009,7 @@ async function sendChat() {
   const activeAIs = [];
   if (state.apis.claude && state.apiKeys.claude) activeAIs.push('claude');
   if (state.apis.gemini && state.apiKeys.gemini) activeAIs.push('gemini');
-  if (state.apis.gpt && state.apiKeys.gpt) activeAIs.push('gpt');
+  if (state.apis.groq && state.apiKeys.groq) activeAIs.push('groq');
 
   if (activeAIs.length === 0) {
     // Demo mode
@@ -2052,7 +2054,7 @@ async function sendChat() {
   state.chatHistory.pop();
 
   // Show individual results with error boundaries
-  const aiNames = { claude: '🟣 Claude', gemini: '🔵 Gemini', gpt: '🟢 GPT' };
+  const aiNames = { claude: '🟣 Claude', gemini: '🔵 Gemini', groq: '🟢 Groq (Llama)' };
   const successAIs = [];
   activeAIs.forEach(ai => {
     if (results[ai]) {
@@ -2136,7 +2138,7 @@ function buildContext(userMsg) {
 async function callAI(type, context, imageData, signal) {
   if (type === 'claude') return await callClaude(context, imageData, signal);
   if (type === 'gemini') return await callGemini(context, imageData, signal);
-  if (type === 'gpt') return await callGPT(context, imageData, signal);
+  if (type === 'groq') return await callGroq(context, imageData, signal);
 }
 
 async function callClaude(context, imageData, signal) {
@@ -2217,38 +2219,35 @@ async function callGemini(context, imageData, signal) {
   return data.candidates[0].content.parts[0].text;
 }
 
-async function callGPT(context, imageData, signal) {
-  const messages = [];
-  const content = [];
-
-  if (imageData) {
-    content.push({ type: 'image_url', image_url: { url: imageData } });
-  }
-  content.push({ type: 'text', text: context });
-  messages.push({ role: 'user', content });
+async function callGroq(context, imageData, signal) {
+  // Groq API - 무료! Llama 3.1 70B (분당 30요청, 일 14,400요청)
+  const messages = [
+    { role: 'user', content: context }
+  ];
 
   let resp;
   try {
-    resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       signal,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${state.apiKeys.gpt}`
+        'Authorization': `Bearer ${state.apiKeys.groq}`
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'llama-3.1-70b-versatile',
         messages,
-        max_tokens: 500
+        max_tokens: 500,
+        temperature: 0.7
       })
     });
   } catch(e) {
     if (e.name === 'AbortError') throw e;
     throw new Error('네트워크 오류: 인터넷 연결을 확인하세요');
   }
-  if (!resp.ok && resp.status === 401) throw new Error('API 키가 유효하지 않습니다');
+  if (!resp.ok && resp.status === 401) throw new Error('Groq API 키가 유효하지 않습니다. console.groq.com에서 무료 발급하세요');
   if (!resp.ok && resp.status === 429) throw new Error('요청 한도 초과. 잠시 후 다시 시도하세요');
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error(`Groq HTTP ${resp.status}`);
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message);
   if (!data.choices || !data.choices[0]) throw new Error('빈 응답');
@@ -2355,8 +2354,8 @@ function crossVerify(results, ais) {
 function showCrossVerify(results, ais) {
   const box = document.getElementById('crossVerifyBox');
   box.style.display = 'block';
-  const aiNames = { claude: '🟣 Claude', gemini: '🔵 Gemini', gpt: '🟢 GPT' };
-  const aiColors = { claude: '#a29bfe', gemini: '#3742fa', gpt: '#00d67e' };
+  const aiNames = { claude: '🟣 Claude', gemini: '🔵 Gemini', groq: '🟢 Groq (Llama)' };
+  const aiColors = { claude: '#a29bfe', gemini: '#3742fa', groq: '#00d67e' };
 
   let html = '';
   const actions = {};
@@ -2464,7 +2463,7 @@ function saveAPIKey(name) {
 }
 
 function restoreAPIUI() {
-  ['claude','gemini','gpt','perplexity','kis','alpha'].forEach(name => {
+  ['claude','gemini','groq','perplexity','alpha'].forEach(name => {
     const toggleEl = document.getElementById('toggle' + name.charAt(0).toUpperCase() + name.slice(1));
     if (toggleEl) toggleEl.classList.toggle('on', state.apis[name]);
     const keyEl = document.getElementById('key' + name.charAt(0).toUpperCase() + name.slice(1));
@@ -2991,8 +2990,30 @@ async function fetchKRStockPrice(code) {
       }
     }
   } catch(e) {
-    // 대체: 데모 데이터 사용
-    console.warn('[KR Stock] 조회 실패:', code, e);
+    console.warn('[Daum Finance] 조회 실패, 네이버 금융 시도:', code, e);
+  }
+  // 백업: 네이버 금융 API
+  try {
+    const naverUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(`https://m.stock.naver.com/api/stock/${code}/basic`)}`;
+    const res2 = await fetch(naverUrl);
+    const json2 = await res2.json();
+    if (json2.contents) {
+      const data = JSON.parse(json2.contents);
+      if (data.closePrice || data.nowVal) {
+        const result = {
+          price: parseInt(data.closePrice || data.nowVal || 0),
+          change: parseFloat(data.fluctuationsRatio || data.rateOfChange || 0),
+          high: parseInt(data.highPrice || data.high52wPrice || 0),
+          low: parseInt(data.lowPrice || data.low52wPrice || 0),
+          volume: parseInt(data.accumulatedTradingVolume || 0),
+          prevClose: parseInt(data.previousClosePrice || 0)
+        };
+        stockCache[cacheKey] = { data: result, time: Date.now() };
+        return result;
+      }
+    }
+  } catch(e2) {
+    console.warn('[Naver Finance] 백업도 실패:', code, e2);
   }
   return null;
 }
