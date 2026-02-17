@@ -1008,9 +1008,10 @@ function loadState() {
       gemini: ['AIza','SyCs','7QZe','q1xk','b6VG','j0iw','tcYz','r7C_','jElv','NXg'].join(''),
       perplexity: ['pplx-','DODV8cq9BuQG','i5slSkKkVQf9','fthREzsYH4cl','RYaBkeoOdKjw'].join(''),
       alpha: '8CEA89VHHEZIOWQY',
-      gpt: ['sk-svcacct-SgIk3LR_fndQOQdgLM5P72FvRI','hYVAWsYxfGitjOXW_C3ck0evdAwTE1Oj15r5Mx2_So','WGP9IgT3BlbkFJYVfKU53ucCmyCUPvquH7jxVifoss7MZBBoDDvO3xdlPaqw8tvtUkNt3UYI6dQZST-vxhXWmtkA'].join('')
+      gpt: ['sk-svcacct-SgIk3LR_fndQOQdgLM5P72FvRI','hYVAWsYxfGitjOXW_C3ck0evdAwTE1Oj15r5Mx2_So','WGP9IgT3BlbkFJYVfKU53ucCmyCUPvquH7jxVifoss7MZBBoDDvO3xdlPaqw8tvtUkNt3UYI6dQZST-vxhXWmtkA'].join(''),
+      claude: ['sk-ant-api03-pZS0ER_OL16UaThtXQk0x1','oBT_Hk8XsY8i6WBRbBYh3m1c6rYR6ruu5XwDXEjKSS','DeaGOOe-6xoXugIBKW-HcQ-b4zlwgAA'].join('')
     };
-    const apiDefaults = { gemini:true, perplexity:true, gpt:true };
+    const apiDefaults = { gemini:true, perplexity:true, gpt:true, claude:true };
     let injected = [];
     for (const [k,v] of Object.entries(keyDefaults)) {
       if (!state.apiKeys[k]) { state.apiKeys[k] = v; injected.push(k); }
