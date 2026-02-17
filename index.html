@@ -1434,6 +1434,7 @@ function init() {
   renderRecentSearches();
   renderWatchlist();
   renderMarketData();
+  initLiveData();
 }
 
 function loadState() {
@@ -1450,7 +1451,7 @@ function loadState() {
       alpha: '8CEA89VHHEZIOWQY',
       claude: ['sk-ant-api03-pZS0ER_OL16UaThtXQk0x1','oBT_Hk8XsY8i6WBRbBYh3m1c6rYR6ruu5XwDXEjKSS','DeaGOOe-6xoXugIBKW-HcQ-b4zlwgAA'].join('')
     };
-    const apiDefaults = { gemini:true, perplexity:true, gpt:false, claude:true };
+    const apiDefaults = { gemini:true, perplexity:true, gpt:false, claude:true, alpha:true, kis:true };
     let injected = [];
     for (const [k,v] of Object.entries(keyDefaults)) {
       if (!state.apiKeys[k]) { state.apiKeys[k] = v; injected.push(k); }
@@ -1575,7 +1576,7 @@ function getAutoVerdict(pct) {
 }
 
 // ==================== SCAN ====================
-function runScan() {
+async function runScan() {
   const input = document.getElementById('scanInput').value.trim();
   if (!input) return;
   const stock = ALL_STOCKS.find(s =>
@@ -1587,14 +1588,30 @@ function runScan() {
     return;
   }
   addRecentSearch(stock.name);
-
   document.getElementById('scanResult').style.display = 'block';
+  document.getElementById('scanDetails').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text3)">📡 실시간 데이터 조회 중...</div>';
 
-  // Generate 120 days of price data
-  const prices = generatePriceData(stock.price, 120);
+  // 실시간 데이터 fetch 시도
+  const liveData = await getLiveStockData(stock.name, stock.code, stock.market);
+  const isLive = !!liveData;
+  const displayPrice = liveData ? liveData.price : stock.price;
+  const displayChange = liveData ? parseFloat(liveData.change) : stock.change;
+
+  // 실시간 일별 데이터 또는 시뮬레이션 데이터
+  let prices;
+  if (stock.market === 'US') {
+    const dailyData = await fetchUSStockDaily(stock.code);
+    if (dailyData && dailyData.length > 0) {
+      prices = dailyData.reverse().map(d => ({
+        open: d.open, high: d.high, low: d.low, close: d.close, volume: d.volume
+      }));
+    }
+  }
+  if (!prices) {
+    prices = generatePriceData(displayPrice, 120);
+  }
+
   drawCandleChart('scanCanvas', prices);
-
-  // Technical scoring (internal only)
   const score = computeTechScore(prices);
   const signal = getSignalText(score);
 
@@ -1602,11 +1619,17 @@ function runScan() {
   document.getElementById('scanSignal').style.background = signal.bg;
   document.getElementById('scanSignal').style.color = signal.color;
 
+  const liveTag = isLive ? '<span style="background:#00d67e22;color:#00d67e;padding:2px 6px;border-radius:4px;font-size:9px;margin-left:6px">🟢 실시간</span>' : '<span style="background:#ffa50222;color:#ffa502;padding:2px 6px;border-radius:4px;font-size:9px;margin-left:6px">🟡 데모</span>';
+  const volumeStr = liveData && liveData.volume ? `<div>거래량: ${formatNum(liveData.volume)}</div>` : '';
+  const highLowStr = liveData && liveData.high ? `<div>고가: ${formatNum(liveData.high)} / 저가: ${formatNum(liveData.low)}</div>` : '';
+
   document.getElementById('scanDetails').innerHTML = `
     <div style="margin-top:8px">
-      <div><b>${stock.name}</b> (${stock.code}) · ${stock.market === 'US' ? '🇺🇸 미국' : '🇰🇷 한국'}</div>
-      <div>현재가: ${formatNum(stock.price)} ${stock.market === 'US' ? '$' : '원'}</div>
-      <div>등락: <span class="${stock.change>=0?'pos':'neg'}">${stock.change>=0?'+':''}${stock.change}%</span></div>
+      <div><b>${stock.name}</b> (${stock.code}) · ${stock.market === 'US' ? '🇺🇸 미국' : '🇰🇷 한국'} ${liveTag}</div>
+      <div>현재가: ${formatNum(displayPrice)} ${stock.market === 'US' ? '$' : '원'}</div>
+      <div>등락: <span class="${displayChange>=0?'pos':'neg'}">${displayChange>=0?'+':''}${displayChange}%</span></div>
+      ${highLowStr}
+      ${volumeStr}
       <div style="margin-top:8px">
         <div class="score-bar-wrap">
           <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3)">
@@ -2891,6 +2914,151 @@ function importData(event) {
     }
   };
   reader.readAsText(file);
+}
+
+// ==================== REAL-TIME STOCK DATA API ====================
+const stockCache = {};
+const CACHE_TTL = 5 * 60 * 1000; // 5분 캐시
+
+async function fetchUSStockPrice(symbol) {
+  if (!state.apis.alpha || !state.apiKeys.alpha) return null;
+  const cacheKey = 'US_' + symbol;
+  if (stockCache[cacheKey] && Date.now() - stockCache[cacheKey].time < CACHE_TTL) return stockCache[cacheKey].data;
+  try {
+    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${state.apiKeys.alpha}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const quote = data['Global Quote'];
+    if (quote && quote['05. price']) {
+      const result = {
+        price: parseFloat(quote['05. price']),
+        change: parseFloat(quote['10. change percent']?.replace('%','') || 0),
+        high: parseFloat(quote['03. high'] || 0),
+        low: parseFloat(quote['04. low'] || 0),
+        volume: parseInt(quote['06. volume'] || 0),
+        prevClose: parseFloat(quote['08. previous close'] || 0)
+      };
+      stockCache[cacheKey] = { data: result, time: Date.now() };
+      return result;
+    }
+  } catch(e) { console.warn('[Alpha Vantage] 조회 실패:', symbol, e); }
+  return null;
+}
+
+async function fetchUSStockDaily(symbol) {
+  if (!state.apis.alpha || !state.apiKeys.alpha) return null;
+  const cacheKey = 'US_DAILY_' + symbol;
+  if (stockCache[cacheKey] && Date.now() - stockCache[cacheKey].time < CACHE_TTL) return stockCache[cacheKey].data;
+  try {
+    const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&outputsize=compact&apikey=${state.apiKeys.alpha}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const ts = data['Time Series (Daily)'];
+    if (ts) {
+      const entries = Object.entries(ts).slice(0, 30).map(([date, v]) => ({
+        date, open: parseFloat(v['1. open']), high: parseFloat(v['2. high']),
+        low: parseFloat(v['3. low']), close: parseFloat(v['4. close']),
+        volume: parseInt(v['5. volume'])
+      }));
+      stockCache[cacheKey] = { data: entries, time: Date.now() };
+      return entries;
+    }
+  } catch(e) { console.warn('[Alpha Vantage] 일별 데이터 실패:', symbol, e); }
+  return null;
+}
+
+async function fetchKRStockPrice(code) {
+  const cacheKey = 'KR_' + code;
+  if (stockCache[cacheKey] && Date.now() - stockCache[cacheKey].time < CACHE_TTL) return stockCache[cacheKey].data;
+  try {
+    // 한국 주식 - KRX 공공데이터 (CORS proxy 사용)
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(`https://finance.daum.net/api/quotes/A${code}?changeRatio=true`)}`;
+    const res = await fetch(proxyUrl);
+    const json = await res.json();
+    if (json.contents) {
+      const data = JSON.parse(json.contents);
+      if (data.tradePrice) {
+        const result = {
+          price: data.tradePrice,
+          change: data.changeRate ? (data.changeRate * 100).toFixed(2) : 0,
+          high: data.highPrice || 0,
+          low: data.lowPrice || 0,
+          volume: data.accTradeVolume || 0,
+          prevClose: data.prevClosingPrice || 0
+        };
+        stockCache[cacheKey] = { data: result, time: Date.now() };
+        return result;
+      }
+    }
+  } catch(e) {
+    // 대체: 데모 데이터 사용
+    console.warn('[KR Stock] 조회 실패:', code, e);
+  }
+  return null;
+}
+
+async function getLiveStockData(name, code, market) {
+  let liveData = null;
+  if (market === 'US') {
+    liveData = await fetchUSStockPrice(code);
+  } else if (market === 'KR') {
+    liveData = await fetchKRStockPrice(code);
+  }
+  if (liveData) {
+    // 데모 데이터 업데이트
+    const stock = ALL_STOCKS.find(s => s.code === code);
+    if (stock) {
+      stock.price = liveData.price;
+      stock.change = parseFloat(liveData.change);
+      stock.volume = liveData.volume;
+      stock.high = liveData.high;
+      stock.low = liveData.low;
+    }
+    return liveData;
+  }
+  return null;
+}
+
+// 관심종목 실시간 업데이트
+async function refreshWatchlistPrices() {
+  if (!state.watchlist || state.watchlist.length === 0) return;
+  const promises = state.watchlist.map(w => getLiveStockData(w.name, w.code, w.market));
+  await Promise.allSettled(promises);
+  renderWatchlist();
+  showToast('📊 관심종목 시세 업데이트 완료');
+}
+
+// 시장 데이터 실시간 업데이트
+async function fetchMarketIndices() {
+  try {
+    if (state.apis.alpha && state.apiKeys.alpha) {
+      // S&P 500
+      const sp500 = await fetchUSStockPrice('SPY');
+      if (sp500) {
+        state.marketData.sp500 = { price: sp500.price.toFixed(2), change: sp500.change.toFixed(2) };
+      }
+      // NASDAQ
+      const nasdaq = await fetchUSStockPrice('QQQ');
+      if (nasdaq) {
+        state.marketData.nasdaq = { price: nasdaq.price.toFixed(2), change: nasdaq.change.toFixed(2) };
+      }
+    }
+    saveState();
+    renderMarketData();
+  } catch(e) { console.warn('시장 지수 업데이트 실패:', e); }
+}
+
+// 앱 로드 시 자동 업데이트
+function initLiveData() {
+  setTimeout(() => {
+    fetchMarketIndices();
+    refreshWatchlistPrices();
+  }, 2000);
+  // 5분마다 자동 갱신
+  setInterval(() => {
+    fetchMarketIndices();
+    refreshWatchlistPrices();
+  }, 5 * 60 * 1000);
 }
 
 // ==================== UTILITIES ====================
