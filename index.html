@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>ALPHA ENGINE v4.0 - 주식 투자 도우미</title>
+<title>ALPHA ENGINE v5.0 - 주식 투자 도우미</title>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -560,13 +560,208 @@ textarea.input-field { resize: vertical; min-height: 60px; }
   gap: 8px;
   margin-bottom: 12px;
 }
+
+/* Skeleton Loading */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--bg3) 25%, var(--bg4) 50%, var(--bg3) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+.skeleton-line { height: 14px; margin-bottom: 8px; border-radius: 4px; }
+.skeleton-line.short { width: 60%; }
+.skeleton-line.medium { width: 80%; }
+.skeleton-block { height: 60px; margin-bottom: 10px; }
+.skeleton-circle { width: 40px; height: 40px; border-radius: 50%; }
+
+/* Recent Search Chips */
+.search-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.search-chip {
+  padding: 4px 10px;
+  border-radius: 16px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  font-size: 11px;
+  font-family: 'Outfit', sans-serif;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s;
+}
+.search-chip:hover { border-color: var(--accent); color: var(--accent); }
+.search-chip .chip-x {
+  font-size: 9px;
+  color: var(--text3);
+  cursor: pointer;
+  margin-left: 2px;
+}
+
+/* Watchlist */
+.watchlist-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.watchlist-item:last-child { border-bottom: none; }
+.watchlist-actions { display: flex; gap: 6px; align-items: center; }
+.watch-btn {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text3);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.watch-btn:hover { border-color: var(--accent); color: var(--accent); }
+.watch-btn.active { background: var(--yellow); border-color: var(--yellow); color: #000; }
+
+/* Confidence Meter */
+.confidence-meter {
+  margin: 8px 0;
+}
+.confidence-bar-bg {
+  height: 8px;
+  background: var(--bg4);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+.confidence-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.8s ease;
+}
+.confidence-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text3);
+  margin-top: 3px;
+}
+.ai-verdict-card {
+  background: var(--bg3);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  margin-bottom: 8px;
+  border-left: 3px solid var(--text3);
+}
+.ai-verdict-card.buy { border-left-color: var(--green); }
+.ai-verdict-card.sell { border-left-color: var(--red); }
+.ai-verdict-card.hold { border-left-color: var(--yellow); }
+
+/* Toast Notification */
+.toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+  background: var(--bg2);
+  color: var(--text);
+  padding: 10px 20px;
+  border-radius: 20px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  z-index: 300;
+  transition: transform 0.3s ease;
+  white-space: nowrap;
+}
+.toast.show { transform: translateX(-50%) translateY(0); }
+
+/* Market Overview Inputs */
+.market-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.market-input-row:last-child { border-bottom: none; }
+.market-input-name { font-size: 13px; font-weight: 600; flex: 1; }
+.market-input-field {
+  width: 100px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  font-family: 'Outfit', sans-serif;
+  font-size: 12px;
+  text-align: right;
+  outline: none;
+}
+.market-input-field:focus { border-color: var(--accent); }
+.market-change-input {
+  width: 70px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  font-family: 'Outfit', sans-serif;
+  font-size: 11px;
+  text-align: right;
+  outline: none;
+}
+
+/* Share Button */
+.btn-share {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn-share:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Error Alert */
+.error-alert {
+  background: rgba(255,71,87,0.1);
+  border: 1px solid rgba(255,71,87,0.3);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--red);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.error-alert .retry-btn {
+  margin-left: auto;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: var(--red);
+  color: white;
+  border: none;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: 'Outfit', sans-serif;
+  white-space: nowrap;
+}
 </style>
 </head>
 <body>
 <!-- Header -->
 <div class="header">
   <div>
-    <div class="header-title">ALPHA ENGINE <span class="header-ver">v4.0</span></div>
+    <div class="header-title">ALPHA ENGINE <span class="header-ver">v5.0</span></div>
   </div>
   <div class="header-actions">
     <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">🌙</button>
@@ -577,6 +772,7 @@ textarea.input-field { resize: vertical; min-height: 60px; }
 <div class="tab-bar" id="tabBar">
   <button class="tab-btn active" data-tab="home"><span class="tab-icon">📊</span>홈</button>
   <button class="tab-btn" data-tab="scan"><span class="tab-icon">🔍</span>스캔</button>
+  <button class="tab-btn" data-tab="watchlist"><span class="tab-icon">⭐</span>관심</button>
   <button class="tab-btn" data-tab="portfolio"><span class="tab-icon">💼</span>포폴</button>
   <button class="tab-btn" data-tab="backtest"><span class="tab-icon">📈</span>백테</button>
   <button class="tab-btn" data-tab="records"><span class="tab-icon">📋</span>기록</button>
@@ -606,22 +802,50 @@ textarea.input-field { resize: vertical; min-height: 60px; }
   </div>
 
   <div class="card">
-    <div class="card-title"><span class="icon">📈</span> 시장 요약</div>
-    <div class="stock-item">
-      <div><div class="stock-name">코스피</div></div>
-      <div><div class="stock-price">2,687.44</div><div class="stock-change pos">+1.22%</div></div>
+    <div class="card-title" style="justify-content:space-between">
+      <span><span class="icon">📈</span> 시장 개요</span>
+      <button class="btn btn-sm btn-outline" onclick="toggleMarketEdit()" id="marketEditBtn">수정</button>
     </div>
-    <div class="stock-item">
-      <div><div class="stock-name">코스닥</div></div>
-      <div><div class="stock-price">842.31</div><div class="stock-change neg">-0.45%</div></div>
+    <div id="marketDisplay">
+      <div class="stock-item">
+        <div><div class="stock-name">코스피</div></div>
+        <div><div class="stock-price" id="mv-kospi-p">2,687.44</div><div class="stock-change" id="mv-kospi-c">+1.22%</div></div>
+      </div>
+      <div class="stock-item">
+        <div><div class="stock-name">코스닥</div></div>
+        <div><div class="stock-price" id="mv-kosdaq-p">842.31</div><div class="stock-change" id="mv-kosdaq-c">-0.45%</div></div>
+      </div>
+      <div class="stock-item">
+        <div><div class="stock-name">S&P 500</div></div>
+        <div><div class="stock-price" id="mv-sp500-p">5,234.18</div><div class="stock-change" id="mv-sp500-c">+0.87%</div></div>
+      </div>
+      <div class="stock-item">
+        <div><div class="stock-name">나스닥</div></div>
+        <div><div class="stock-price" id="mv-nasdaq-p">16,428.82</div><div class="stock-change" id="mv-nasdaq-c">+1.15%</div></div>
+      </div>
     </div>
-    <div class="stock-item">
-      <div><div class="stock-name">S&P 500</div></div>
-      <div><div class="stock-price">5,234.18</div><div class="stock-change pos">+0.87%</div></div>
-    </div>
-    <div class="stock-item">
-      <div><div class="stock-name">나스닥</div></div>
-      <div><div class="stock-price">16,428.82</div><div class="stock-change pos">+1.15%</div></div>
+    <div id="marketEditForm" style="display:none">
+      <div class="market-input-row">
+        <span class="market-input-name">코스피</span>
+        <input type="text" class="market-input-field" id="me-kospi-p" placeholder="지수">
+        <input type="text" class="market-change-input" id="me-kospi-c" placeholder="%">
+      </div>
+      <div class="market-input-row">
+        <span class="market-input-name">코스닥</span>
+        <input type="text" class="market-input-field" id="me-kosdaq-p" placeholder="지수">
+        <input type="text" class="market-change-input" id="me-kosdaq-c" placeholder="%">
+      </div>
+      <div class="market-input-row">
+        <span class="market-input-name">S&P 500</span>
+        <input type="text" class="market-input-field" id="me-sp500-p" placeholder="지수">
+        <input type="text" class="market-change-input" id="me-sp500-c" placeholder="%">
+      </div>
+      <div class="market-input-row">
+        <span class="market-input-name">나스닥</span>
+        <input type="text" class="market-input-field" id="me-nasdaq-p" placeholder="지수">
+        <input type="text" class="market-change-input" id="me-nasdaq-c" placeholder="%">
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="saveMarketData()" style="width:100%;margin-top:8px">저장</button>
     </div>
   </div>
 
@@ -639,6 +863,7 @@ textarea.input-field { resize: vertical; min-height: 60px; }
       <label>종목명 또는 코드 입력</label>
       <input type="text" class="input-field" id="scanInput" placeholder="삼성전자, AAPL 등">
     </div>
+    <div id="recentSearches" class="search-chips" style="display:none"></div>
     <div style="display:flex;gap:8px">
       <button class="btn btn-primary" onclick="runScan()" style="flex:1">분석하기</button>
     </div>
@@ -651,6 +876,17 @@ textarea.input-field { resize: vertical; min-height: 60px; }
     </div>
     <div id="scanSignal" style="text-align:center;padding:12px;font-size:15px;font-weight:700;border-radius:8px;margin-bottom:8px"></div>
     <div id="scanDetails" style="font-size:12px;color:var(--text2)"></div>
+  </div>
+</div>
+
+<!-- ===== WATCHLIST TAB ===== -->
+<div class="tab-content" id="tab-watchlist">
+  <div class="card">
+    <div class="card-title" style="justify-content:space-between">
+      <span><span class="icon">⭐</span> 관심종목</span>
+      <button class="btn btn-sm btn-primary" onclick="openWatchlistModal()">+ 추가</button>
+    </div>
+    <div id="watchlistItems"><p style="font-size:12px;color:var(--text3)">관심종목을 추가하세요</p></div>
   </div>
 </div>
 
@@ -764,6 +1000,11 @@ textarea.input-field { resize: vertical; min-height: 60px; }
     </div>
   </div>
 
+  <div style="display:flex;gap:8px;margin-top:8px">
+    <button class="btn btn-sm btn-share" onclick="shareResults()">📋 공유하기</button>
+    <button class="btn btn-sm btn-outline" onclick="clearChat()">🗑 대화 초기화</button>
+  </div>
+
   <div class="card" id="crossVerifyBox" style="display:none">
     <div class="card-title"><span class="icon">🔀</span> 교차검증 결과</div>
     <div id="crossResults"></div>
@@ -841,7 +1082,7 @@ textarea.input-field { resize: vertical; min-height: 60px; }
       <button class="btn btn-outline" onclick="document.getElementById('importFile').click()" style="flex:1">📥 가져오기</button>
       <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(event)">
     </div>
-    <button class="btn btn-red btn-sm" onclick="if(confirm('모든 데이터를 초기화할까요?')){localStorage.clear();location.reload()}" style="width:100%">🗑 데이터 초기화</button>
+    <button class="btn btn-red btn-sm" onclick="if(confirm('모든 데이터를 초기화할까요?')){localStorage.removeItem('alphaEngine5');localStorage.removeItem('alphaEngine4');location.reload()}" style="width:100%">🗑 데이터 초기화</button>
   </div>
 </div>
 
@@ -934,6 +1175,24 @@ textarea.input-field { resize: vertical; min-height: 60px; }
   </div>
 </div>
 
+<!-- Watchlist Add Modal -->
+<div class="modal-overlay" id="watchlistModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <div class="modal-title">관심종목 추가</div>
+      <button class="modal-close" onclick="closeWatchlistModal()">✕</button>
+    </div>
+    <div class="input-group">
+      <label>종목 검색</label>
+      <input type="text" class="input-field" id="wlSearch" placeholder="종목명 또는 코드 입력" oninput="filterWatchlistSearch()">
+    </div>
+    <div id="wlSearchResults" style="max-height:300px;overflow-y:auto"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
 <script>
 // ==================== DEMO DATA ====================
 const DEMO_STOCKS = {
@@ -982,7 +1241,15 @@ let state = {
   portfolio: [],
   records: [],
   chatHistory: [],
-  pendingImage: null
+  pendingImage: null,
+  watchlist: [],
+  recentSearches: [],
+  marketData: {
+    kospi: { price: '2,687.44', change: '+1.22' },
+    kosdaq: { price: '842.31', change: '-0.45' },
+    sp500: { price: '5,234.18', change: '+0.87' },
+    nasdaq: { price: '16,428.82', change: '+1.15' }
+  }
 };
 
 // ==================== INIT ====================
@@ -994,11 +1261,14 @@ function init() {
   populateBtSelect();
   renderAll();
   restoreAPIUI();
+  renderRecentSearches();
+  renderWatchlist();
+  renderMarketData();
 }
 
 function loadState() {
   try {
-    const saved = localStorage.getItem('alphaEngine4');
+    const saved = localStorage.getItem('alphaEngine5') || localStorage.getItem('alphaEngine4');
     if (saved) {
       const parsed = JSON.parse(saved);
       state = { ...state, ...parsed };
@@ -1023,7 +1293,7 @@ function loadState() {
 }
 
 function saveState() {
-  localStorage.setItem('alphaEngine4', JSON.stringify(state));
+  localStorage.setItem('alphaEngine5', JSON.stringify(state));
 }
 
 function applyTheme() {
@@ -1045,10 +1315,12 @@ function setupTabs() {
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-      if (btn.dataset.tab === 'home') renderHome();
+      if (btn.dataset.tab === 'home') { renderHome(); renderMarketData(); }
       if (btn.dataset.tab === 'records') renderRecords();
       if (btn.dataset.tab === 'portfolio') renderPortfolio();
       if (btn.dataset.tab === 'command') renderChat();
+      if (btn.dataset.tab === 'watchlist') renderWatchlist();
+      if (btn.dataset.tab === 'scan') renderRecentSearches();
     });
   });
 }
@@ -1141,9 +1413,10 @@ function runScan() {
     s.code.toLowerCase() === input.toLowerCase()
   );
   if (!stock) {
-    alert('종목을 찾을 수 없습니다. 데모 종목 24개 중에서 검색해주세요.');
+    showToast('종목을 찾을 수 없습니다. 데모 종목에서 검색해주세요.');
     return;
   }
+  addRecentSearch(stock.name);
 
   document.getElementById('scanResult').style.display = 'block';
 
@@ -1522,17 +1795,20 @@ async function sendChat() {
     return;
   }
 
-  // Show loading
-  state.chatHistory.push({ role: 'ai', content: '🔄 AI에게 물어보는 중...' });
+  // Show skeleton loading
+  const loadingId = Date.now();
+  state.chatHistory.push({ role: 'ai', content: `<div id="loading-${loadingId}"><div class="skeleton skeleton-line medium"></div><div class="skeleton skeleton-line short"></div><div class="skeleton skeleton-line"></div></div>` });
   renderChat();
 
   const results = {};
+  const errors = {};
   const promises = activeAIs.map(async ai => {
     try {
-      const response = await callAI(ai, context, imageData);
+      const response = await callAIWithTimeout(ai, context, imageData, 30000);
       results[ai] = response;
     } catch(e) {
-      results[ai] = `⚠️ ${ai} 오류: ${e.message}`;
+      errors[ai] = e.message || 'Unknown error';
+      results[ai] = null;
     }
   });
 
@@ -1540,7 +1816,7 @@ async function sendChat() {
   if (state.apis.perplexity && state.apiKeys.perplexity) {
     promises.push((async () => {
       try {
-        results.perplexity = await callPerplexity(msg);
+        results.perplexity = await callPerplexityWithTimeout(msg, 15000);
       } catch(e) {
         results.perplexity = null;
       }
@@ -1549,14 +1825,18 @@ async function sendChat() {
 
   await Promise.all(promises);
 
-  // Remove loading
+  // Remove loading skeleton
   state.chatHistory.pop();
 
-  // Show individual results
+  // Show individual results with error boundaries
   const aiNames = { claude: '🟣 Claude', gemini: '🔵 Gemini', gpt: '🟢 GPT' };
+  const successAIs = [];
   activeAIs.forEach(ai => {
     if (results[ai]) {
       state.chatHistory.push({ role: 'ai', content: `${aiNames[ai]}:\n${results[ai]}` });
+      successAIs.push(ai);
+    } else if (errors[ai]) {
+      state.chatHistory.push({ role: 'ai', content: `${aiNames[ai]}: 응답 실패 (${errors[ai].substring(0,80)})\n다른 AI 결과를 참고하세요.` });
     }
   });
 
@@ -1564,11 +1844,15 @@ async function sendChat() {
     state.chatHistory.push({ role: 'ai', content: `🔍 최신 뉴스:\n${results.perplexity}` });
   }
 
-  // Cross verification
-  if (activeAIs.length >= 2) {
-    const verdict = crossVerify(results, activeAIs);
+  // Cross verification (only with successful results)
+  if (successAIs.length >= 2) {
+    const verdict = crossVerify(results, successAIs);
     state.chatHistory.push({ role: 'ai', content: verdict });
-    showCrossVerify(results, activeAIs);
+    showCrossVerify(results, successAIs);
+  } else if (successAIs.length === 1) {
+    state.chatHistory.push({ role: 'ai', content: '교차검증 불가: AI 1개만 응답하여 단독 의견입니다.' });
+  } else if (successAIs.length === 0) {
+    state.chatHistory.push({ role: 'ai', content: '모든 AI 응답 실패. 네트워크 또는 API 키를 확인하세요.' });
   }
 
   saveState();
@@ -1644,22 +1928,31 @@ async function callClaude(context, imageData) {
   content.push({ type: 'text', text: context });
   messages.push({ role: 'user', content });
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': state.apiKeys.claude,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
-      messages
-    })
-  });
+  let resp;
+  try {
+    resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': state.apiKeys.claude,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 500,
+        messages
+      })
+    });
+  } catch(e) {
+    throw new Error('네트워크 오류: 인터넷 연결을 확인하세요');
+  }
+  if (!resp.ok && resp.status === 401) throw new Error('API 키가 유효하지 않습니다');
+  if (!resp.ok && resp.status === 429) throw new Error('요청 한도 초과. 잠시 후 다시 시도하세요');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message);
+  if (!data.content || !data.content[0]) throw new Error('빈 응답');
   return data.content[0].text;
 }
 
@@ -1672,16 +1965,25 @@ async function callGemini(context, imageData) {
   }
   parts.push({ text: context });
 
-  const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${state.apiKeys.gemini}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts }],
-      generationConfig: { maxOutputTokens: 500 }
-    })
-  });
+  let resp;
+  try {
+    resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${state.apiKeys.gemini}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { maxOutputTokens: 500 }
+      })
+    });
+  } catch(e) {
+    throw new Error('네트워크 오류: 인터넷 연결을 확인하세요');
+  }
+  if (!resp.ok && resp.status === 400) throw new Error('API 키가 유효하지 않습니다');
+  if (!resp.ok && resp.status === 429) throw new Error('요청 한도 초과. 잠시 후 다시 시도하세요');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message);
+  if (!data.candidates || !data.candidates[0]) throw new Error('빈 응답');
   return data.candidates[0].content.parts[0].text;
 }
 
@@ -1695,42 +1997,86 @@ async function callGPT(context, imageData) {
   content.push({ type: 'text', text: context });
   messages.push({ role: 'user', content });
 
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${state.apiKeys.gpt}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages,
-      max_tokens: 500
-    })
-  });
+  let resp;
+  try {
+    resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${state.apiKeys.gpt}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages,
+        max_tokens: 500
+      })
+    });
+  } catch(e) {
+    throw new Error('네트워크 오류: 인터넷 연결을 확인하세요');
+  }
+  if (!resp.ok && resp.status === 401) throw new Error('API 키가 유효하지 않습니다');
+  if (!resp.ok && resp.status === 429) throw new Error('요청 한도 초과. 잠시 후 다시 시도하세요');
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message);
+  if (!data.choices || !data.choices[0]) throw new Error('빈 응답');
   return data.choices[0].message.content;
 }
 
 async function callPerplexity(query) {
-  const resp = await fetch('https://api.perplexity.ai/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${state.apiKeys.perplexity}`
-    },
-    body: JSON.stringify({
-      model: 'sonar',
-      messages: [
-        { role: 'system', content: '한국어로 답변하세요. 주식 관련 최신 뉴스를 쉬운 말로 2-3줄로 요약하세요.' },
-        { role: 'user', content: query + ' 관련 최신 뉴스' }
-      ],
-      max_tokens: 300
-    })
-  });
+  let resp;
+  try {
+    resp = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${state.apiKeys.perplexity}`
+      },
+      body: JSON.stringify({
+        model: 'sonar',
+        messages: [
+          { role: 'system', content: '한국어로 답변하세요. 주식 관련 최신 뉴스를 쉬운 말로 2-3줄로 요약하세요.' },
+          { role: 'user', content: query + ' 관련 최신 뉴스' }
+        ],
+        max_tokens: 300
+      })
+    });
+  } catch(e) {
+    throw new Error('Perplexity 네트워크 오류');
+  }
+  if (!resp.ok) throw new Error(`Perplexity HTTP ${resp.status}`);
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message);
+  if (!data.choices || !data.choices[0]) throw new Error('빈 응답');
   return data.choices[0].message.content;
+}
+
+// ==================== ERROR BOUNDARIES & TIMEOUT ====================
+async function callAIWithTimeout(type, context, imageData, timeoutMs) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await callAI(type, context, imageData);
+    clearTimeout(timeoutId);
+    return response;
+  } catch(e) {
+    clearTimeout(timeoutId);
+    if (e.name === 'AbortError') throw new Error('응답 시간 초과 (30초)');
+    throw e;
+  }
+}
+
+async function callPerplexityWithTimeout(query, timeoutMs) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await callPerplexity(query);
+    clearTimeout(timeoutId);
+    return response;
+  } catch(e) {
+    clearTimeout(timeoutId);
+    throw e;
+  }
 }
 
 function crossVerify(results, ais) {
@@ -1755,33 +2101,66 @@ function showCrossVerify(results, ais) {
   const box = document.getElementById('crossVerifyBox');
   box.style.display = 'block';
   const aiNames = { claude: '🟣 Claude', gemini: '🔵 Gemini', gpt: '🟢 GPT' };
+  const aiColors = { claude: '#a29bfe', gemini: '#3742fa', gpt: '#00d67e' };
 
   let html = '';
   const actions = {};
   ais.forEach(ai => {
     const txt = (results[ai] || '').toLowerCase();
-    let action, color;
-    if (txt.includes('사라') || txt.includes('매수') || txt.includes('buy')) { action = '사라'; color = 'var(--green)'; actions[ai] = 'buy'; }
-    else if (txt.includes('팔아라') || txt.includes('매도') || txt.includes('sell')) { action = '팔아라'; color = 'var(--red)'; actions[ai] = 'sell'; }
-    else { action = '기다려라'; color = 'var(--yellow)'; actions[ai] = 'hold'; }
-    html += `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px">
-      <span>${aiNames[ai]}</span>
-      <span style="color:${color};font-weight:700">${action}</span>
+    let action, actionClass, confidence;
+    if (txt.includes('사라') || txt.includes('매수') || txt.includes('buy')) {
+      action = '사라'; actionClass = 'buy'; actions[ai] = 'buy';
+      confidence = txt.includes('지금') || txt.includes('적극') ? 90 : 70;
+    } else if (txt.includes('팔아라') || txt.includes('매도') || txt.includes('sell')) {
+      action = '팔아라'; actionClass = 'sell'; actions[ai] = 'sell';
+      confidence = txt.includes('즉시') || txt.includes('빨리') ? 90 : 70;
+    } else {
+      action = '기다려라'; actionClass = 'hold'; actions[ai] = 'hold';
+      confidence = 60;
+    }
+    const barColor = actionClass === 'buy' ? 'var(--green)' : actionClass === 'sell' ? 'var(--red)' : 'var(--yellow)';
+
+    html += `<div class="ai-verdict-card ${actionClass}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:13px;font-weight:600">${aiNames[ai]}</span>
+        <span style="font-size:13px;font-weight:700;color:${barColor}">${action}</span>
+      </div>
+      <div class="confidence-meter">
+        <div class="confidence-bar-bg">
+          <div class="confidence-bar-fill" style="width:${confidence}%;background:${barColor}"></div>
+        </div>
+        <div class="confidence-label">
+          <span>확신도</span>
+          <span>${confidence}%</span>
+        </div>
+      </div>
     </div>`;
   });
 
   document.getElementById('crossResults').innerHTML = html;
 
   const vals = Object.values(actions);
+  const buyCount = vals.filter(v => v === 'buy').length;
+  const sellCount = vals.filter(v => v === 'sell').length;
+  const holdCount = vals.filter(v => v === 'hold').length;
+  const total = vals.length;
   const allBuy = vals.every(v => v === 'buy');
   const allSell = vals.every(v => v === 'sell');
 
-  let verdictClass, verdictText;
-  if (allBuy) { verdictClass = 'verdict-buy'; verdictText = '🟢 지금 사세요!'; }
-  else if (allSell) { verdictClass = 'verdict-sell'; verdictText = '🔴 지금 파세요!'; }
-  else { verdictClass = 'verdict-hold'; verdictText = '🟡 지금은 기다리세요'; }
+  let verdictClass, verdictText, agreement;
+  if (allBuy) { verdictClass = 'verdict-buy'; verdictText = '🟢 지금 사세요!'; agreement = 100; }
+  else if (allSell) { verdictClass = 'verdict-sell'; verdictText = '🔴 지금 파세요!'; agreement = 100; }
+  else { verdictClass = 'verdict-hold'; verdictText = '🟡 지금은 기다리세요'; agreement = Math.round(Math.max(buyCount,sellCount,holdCount)/total*100); }
 
-  document.getElementById('finalVerdict').innerHTML = `<div class="verdict-box ${verdictClass}">${verdictText}</div>`;
+  document.getElementById('finalVerdict').innerHTML = `
+    <div class="verdict-box ${verdictClass}">${verdictText}</div>
+    <div style="margin-top:10px;display:flex;gap:4px;height:24px;border-radius:6px;overflow:hidden">
+      ${buyCount ? `<div style="flex:${buyCount};background:var(--green);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#000">사라 ${Math.round(buyCount/total*100)}%</div>` : ''}
+      ${holdCount ? `<div style="flex:${holdCount};background:var(--yellow);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#000">기다려 ${Math.round(holdCount/total*100)}%</div>` : ''}
+      ${sellCount ? `<div style="flex:${sellCount};background:var(--red);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff">팔아 ${Math.round(sellCount/total*100)}%</div>` : ''}
+    </div>
+    <div style="text-align:center;font-size:10px;color:var(--text3);margin-top:6px">AI 의견 일치도: ${agreement}% (${total}개 AI 참여)</div>
+  `;
 }
 
 function generateDemoResponse(msg) {
@@ -2300,6 +2679,215 @@ function formatKRW(n) {
 
 function toDateStr(d) {
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
+// ==================== WATCHLIST ====================
+function renderWatchlist() {
+  const el = document.getElementById('watchlistItems');
+  if (!el) return;
+  if (!state.watchlist || state.watchlist.length === 0) {
+    el.innerHTML = '<p style="font-size:12px;color:var(--text3)">관심종목을 추가하세요</p>';
+    return;
+  }
+  el.innerHTML = state.watchlist.map((w, i) => {
+    const demo = findStock(w.name, w.code);
+    const price = demo ? demo.price : 0;
+    const change = demo ? demo.change : 0;
+    const flag = w.market === 'US' ? '🇺🇸' : '🇰🇷';
+    return `<div class="watchlist-item">
+      <div>
+        <div class="stock-name">${flag} ${w.name}</div>
+        <div class="stock-code">${w.code}</div>
+      </div>
+      <div class="watchlist-actions">
+        <div style="text-align:right;margin-right:8px">
+          <div class="stock-price">${formatNum(price)}</div>
+          <div class="stock-change ${change>=0?'pos':'neg'}">${change>=0?'+':''}${change}%</div>
+        </div>
+        <button class="watch-btn" onclick="scanFromWatchlist('${w.name}')" title="분석">🔍</button>
+        <button class="watch-btn" onclick="removeWatchlist(${i})" title="삭제">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openWatchlistModal() {
+  document.getElementById('watchlistModal').classList.add('show');
+  document.getElementById('wlSearch').value = '';
+  filterWatchlistSearch();
+}
+function closeWatchlistModal() {
+  document.getElementById('watchlistModal').classList.remove('show');
+}
+
+function filterWatchlistSearch() {
+  const q = (document.getElementById('wlSearch').value || '').trim().toLowerCase();
+  const results = q.length === 0 ? ALL_STOCKS : ALL_STOCKS.filter(s =>
+    s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q)
+  );
+  const el = document.getElementById('wlSearchResults');
+  el.innerHTML = results.map(s => {
+    const flag = s.market === 'US' ? '🇺🇸' : '🇰🇷';
+    const inList = (state.watchlist || []).some(w => w.code === s.code);
+    return `<div class="stock-item" style="cursor:pointer" onclick="${inList ? '' : `addToWatchlist('${s.name}','${s.code}','${s.market}')`}">
+      <div>
+        <div class="stock-name">${flag} ${s.name}</div>
+        <div class="stock-code">${s.code} · ${formatNum(s.price)}</div>
+      </div>
+      <div>${inList ? '<span style="font-size:11px;color:var(--yellow)">추가됨</span>' : '<button class="btn btn-sm btn-primary" style="padding:4px 10px;font-size:10px">추가</button>'}</div>
+    </div>`;
+  }).join('');
+}
+
+function addToWatchlist(name, code, market) {
+  if (!state.watchlist) state.watchlist = [];
+  if (state.watchlist.some(w => w.code === code)) return;
+  state.watchlist.push({ name, code, market });
+  saveState();
+  showToast(`${name} 관심종목에 추가됨`);
+  filterWatchlistSearch();
+  renderWatchlist();
+}
+
+function removeWatchlist(idx) {
+  const name = state.watchlist[idx].name;
+  state.watchlist.splice(idx, 1);
+  saveState();
+  showToast(`${name} 관심종목에서 제거됨`);
+  renderWatchlist();
+}
+
+function scanFromWatchlist(name) {
+  document.getElementById('scanInput').value = name;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelector('[data-tab="scan"]').classList.add('active');
+  document.getElementById('tab-scan').classList.add('active');
+  runScan();
+}
+
+// ==================== RECENT SEARCHES ====================
+function addRecentSearch(term) {
+  if (!state.recentSearches) state.recentSearches = [];
+  state.recentSearches = state.recentSearches.filter(s => s !== term);
+  state.recentSearches.unshift(term);
+  if (state.recentSearches.length > 8) state.recentSearches.pop();
+  saveState();
+  renderRecentSearches();
+}
+
+function renderRecentSearches() {
+  const el = document.getElementById('recentSearches');
+  if (!el) return;
+  if (!state.recentSearches || state.recentSearches.length === 0) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'flex';
+  el.innerHTML = '<span style="font-size:10px;color:var(--text3);white-space:nowrap;padding:4px 0">최근:</span>' +
+    state.recentSearches.map((s, i) =>
+      `<div class="search-chip" onclick="document.getElementById('scanInput').value='${s}';runScan()">
+        ${s}<span class="chip-x" onclick="event.stopPropagation();removeRecentSearch(${i})">✕</span>
+      </div>`
+    ).join('');
+}
+
+function removeRecentSearch(idx) {
+  state.recentSearches.splice(idx, 1);
+  saveState();
+  renderRecentSearches();
+}
+
+// ==================== MARKET DATA ====================
+let marketEditMode = false;
+function toggleMarketEdit() {
+  marketEditMode = !marketEditMode;
+  document.getElementById('marketDisplay').style.display = marketEditMode ? 'none' : 'block';
+  document.getElementById('marketEditForm').style.display = marketEditMode ? 'block' : 'none';
+  document.getElementById('marketEditBtn').textContent = marketEditMode ? '취소' : '수정';
+  if (marketEditMode) {
+    const md = state.marketData || {};
+    ['kospi','kosdaq','sp500','nasdaq'].forEach(k => {
+      const d = md[k] || {};
+      document.getElementById('me-'+k+'-p').value = d.price || '';
+      document.getElementById('me-'+k+'-c').value = d.change || '';
+    });
+  }
+}
+
+function saveMarketData() {
+  if (!state.marketData) state.marketData = {};
+  ['kospi','kosdaq','sp500','nasdaq'].forEach(k => {
+    state.marketData[k] = {
+      price: document.getElementById('me-'+k+'-p').value,
+      change: document.getElementById('me-'+k+'-c').value
+    };
+  });
+  saveState();
+  renderMarketData();
+  toggleMarketEdit();
+  showToast('시장 데이터가 저장되었습니다');
+}
+
+function renderMarketData() {
+  const md = state.marketData || {};
+  ['kospi','kosdaq','sp500','nasdaq'].forEach(k => {
+    const d = md[k] || {};
+    const pEl = document.getElementById('mv-'+k+'-p');
+    const cEl = document.getElementById('mv-'+k+'-c');
+    if (pEl) pEl.textContent = d.price || '-';
+    if (cEl) {
+      const val = parseFloat(d.change) || 0;
+      cEl.textContent = (val >= 0 ? '+' : '') + d.change + '%';
+      cEl.className = 'stock-change ' + (val >= 0 ? 'pos' : 'neg');
+    }
+  });
+}
+
+// ==================== SHARE RESULTS ====================
+function shareResults() {
+  if (!state.chatHistory || state.chatHistory.length === 0) {
+    showToast('공유할 분석 결과가 없습니다');
+    return;
+  }
+  const text = state.chatHistory
+    .filter(m => m.role === 'ai')
+    .map(m => m.content)
+    .join('\n\n');
+  const shareText = '=== ALPHA ENGINE v5.0 분석 결과 ===\n\n' + text + '\n\n(ALPHA ENGINE v5.0으로 분석)';
+  navigator.clipboard.writeText(shareText).then(() => {
+    showToast('분석 결과가 클립보드에 복사되었습니다');
+  }).catch(() => {
+    showToast('복사 실패 - 브라우저 설정을 확인하세요');
+  });
+}
+
+function clearChat() {
+  if (!confirm('대화 기록을 초기화할까요?')) return;
+  state.chatHistory = [];
+  document.getElementById('crossVerifyBox').style.display = 'none';
+  saveState();
+  renderChat();
+  showToast('대화가 초기화되었습니다');
+}
+
+// ==================== TOAST ====================
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ==================== SKELETON LOADING ====================
+function showSkeleton(containerId, count) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  let html = '';
+  for (let i = 0; i < (count || 3); i++) {
+    html += `<div class="skeleton skeleton-block" style="width:100%"></div>`;
+  }
+  el.innerHTML = html;
 }
 
 // ==================== INIT ====================
