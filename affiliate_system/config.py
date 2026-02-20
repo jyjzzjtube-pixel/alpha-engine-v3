@@ -21,6 +21,11 @@ DRIVE_CLIENT_SECRET = os.getenv('DRIVE_CLIENT_SECRET', '')
 INSTAGRAM_USERNAME  = os.getenv('INSTAGRAM_USERNAME', '')
 INSTAGRAM_PASSWORD  = os.getenv('INSTAGRAM_PASSWORD', '')
 
+# ── Coupang Partners API ──
+COUPANG_ACCESS_KEY  = os.getenv('COUPANG_ACCESS_KEY', '')
+COUPANG_SECRET_KEY  = os.getenv('COUPANG_SECRET_KEY', '')
+COUPANG_PARTNER_ID  = os.getenv('COUPANG_PARTNER_ID', '')
+
 # ── Stock Media API Keys (무료) ──
 PEXELS_API_KEY      = os.getenv('PEXELS_API_KEY', '')
 PIXABAY_API_KEY     = os.getenv('PIXABAY_API_KEY', '')

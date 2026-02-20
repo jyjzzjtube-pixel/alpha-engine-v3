@@ -510,6 +510,7 @@ class AIGenerator:
 상품명: {product.title}
 가격: {product.price}
 설명: {product.description[:400] if product.description else '(없음)'}
+구매 링크: {product.affiliate_link or '(프로필 링크)'}
 
 반드시 아래 5개 섹션을 모두 빠짐없이 작성하세요:
 
@@ -517,7 +518,7 @@ class AIGenerator:
 이모지 포함, 100자 이내 Shorts 제목
 
 [설명]
-핵심 메시지와 CTA 포함 200자 이내 설명문
+핵심 메시지와 CTA 포함 200자 이내 설명문. 마지막에 "링크는 설명란에서 확인!" 같은 CTA 포함
 
 [나레이션]
 [장면1] 충격 도입 한 줄
@@ -564,6 +565,7 @@ class AIGenerator:
 상품명: {product.title}
 가격: {product.price}
 설명: {product.description[:400] if product.description else '(없음)'}
+구매 링크: {product.affiliate_link or '(프로필 링크)'}
 
 반드시 아래 5개 섹션을 모두 빠짐없이 작성하세요:
 
@@ -572,7 +574,7 @@ class AIGenerator:
 
 [캡션]
 이모지와 줄바꿈을 활용한 감성적 캡션을 300~500자로 작성하세요.
-상품의 매력을 감각적으로 표현하고, 마지막에 "저장하고 나중에 참고하세요!" 같은 CTA를 넣으세요.
+상품의 매력을 감각적으로 표현하고, 마지막에 "구매 링크는 프로필에서!" 같은 CTA를 넣으세요.
 
 [나레이션]
 [장면1] 트렌디한 도입 인사 한 줄
