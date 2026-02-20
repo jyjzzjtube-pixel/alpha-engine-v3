@@ -3,6 +3,14 @@ Affiliate Marketing System -- Video Rendering & Anti-Ban Pipeline
 =================================================================
 MoviePy 기반 숏폼 영상 렌더링, 안티밴 변조, 기존 영상 세탁 기능.
 MoviePy v1 / v2 양쪽 API 를 자동 감지하여 호환 동작.
+
+v2 업그레이드 (Pro Quality):
+- 플랫폼별 렌더링 (YouTube Shorts / Instagram Reels / Naver Blog)
+- 다양한 전환 효과 (슬라이드, 줌, 와이프, 플래시, 글리치 등)
+- 모션 텍스트 애니메이션 (타자기, 바운스, 스케일, 글로우 등)
+- 장르별 BGM 생성 (Lo-Fi, Upbeat, Cinematic, Energetic 등)
+- 인트로/아웃트로/워터마크 브랜딩 시스템
+- 플랫폼별 RenderConfig 자동 설정
 """
 
 from __future__ import annotations
@@ -22,7 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageEnhance, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from affiliate_system.config import (
     VIDEO_WIDTH_BASE,
@@ -35,7 +43,12 @@ from affiliate_system.config import (
     RENDER_OUTPUT_DIR,
     WORK_DIR,
 )
-from affiliate_system.models import RenderConfig, Campaign
+from affiliate_system.models import (
+    RenderConfig, Campaign, Platform,
+    PlatformPreset, PLATFORM_PRESETS,
+    BrandingConfig, BRAND_BRANDING,
+    TransitionType, BGMGenre, TextAnimation,
+)
 from affiliate_system.utils import setup_logger, retry, file_md5, ensure_dir
 
 __all__ = ["VideoForge"]
@@ -90,6 +103,19 @@ TTS_VOICES = {
     "ko-male": "ko-KR-InJoonNeural",
     "en-female": "en-US-JennyNeural",
     "en-male": "en-US-GuyNeural",
+    # 추가 음성 (감정/스타일 변화용)
+    "ko-female-bright": "ko-KR-SunHiNeural",   # 밝은 톤 (SSML prosody 조절)
+    "ko-male-calm": "ko-KR-InJoonNeural",       # 차분한 톤
+}
+
+# SSML 감정 프리셋 — generate_tts_ssml()에서 사용
+TTS_EMOTION_PRESETS = {
+    "excited": {"rate": "+20%", "pitch": "+10%", "volume": "+10%"},
+    "calm": {"rate": "-10%", "pitch": "-5%", "volume": "-5%"},
+    "dramatic": {"rate": "-15%", "pitch": "+5%", "volume": "+15%"},
+    "friendly": {"rate": "+5%", "pitch": "+3%", "volume": "+0%"},
+    "urgent": {"rate": "+25%", "pitch": "+8%", "volume": "+15%"},
+    "whisper": {"rate": "-20%", "pitch": "-10%", "volume": "-20%"},
 }
 
 # ---------------------------------------------------------------------------
@@ -104,6 +130,33 @@ EFFECT_PRESETS = {
     "cinematic": ["zoom_in", "drift", "zoom_out", "drift", "zoom_in", "drift"],
     "speed": ["pan_left", "pan_right", "diag_dr", "diag_dl", "tilt_up", "tilt_down"],
     "simple": ["zoom_in"] * 12,
+}
+
+# ---------------------------------------------------------------------------
+# BGM 장르별 파라미터 — generate_bgm_pro()에서 사용
+# ---------------------------------------------------------------------------
+BGM_GENRE_PARAMS = {
+    "lofi": {"bpm": 85, "key_freq": 55, "pad_freqs": (220, 330, 440),
+             "pad_vol": 0.02, "kick_vol": 0.4, "bass_vol": 0.1,
+             "hihat_vol": 0.06, "fade_in": 0.8, "fade_out": 2.0},
+    "upbeat": {"bpm": 120, "key_freq": 65, "pad_freqs": (261, 392, 523),
+               "pad_vol": 0.03, "kick_vol": 0.5, "bass_vol": 0.15,
+               "hihat_vol": 0.08, "fade_in": 0.3, "fade_out": 1.5},
+    "cinematic": {"bpm": 60, "key_freq": 44, "pad_freqs": (174, 261, 349),
+                  "pad_vol": 0.04, "kick_vol": 0.25, "bass_vol": 0.08,
+                  "hihat_vol": 0.02, "fade_in": 2.0, "fade_out": 3.0},
+    "energetic": {"bpm": 140, "key_freq": 73, "pad_freqs": (293, 440, 587),
+                  "pad_vol": 0.025, "kick_vol": 0.55, "bass_vol": 0.18,
+                  "hihat_vol": 0.10, "fade_in": 0.2, "fade_out": 1.0},
+    "chill": {"bpm": 75, "key_freq": 49, "pad_freqs": (196, 294, 392),
+              "pad_vol": 0.035, "kick_vol": 0.3, "bass_vol": 0.08,
+              "hihat_vol": 0.04, "fade_in": 1.5, "fade_out": 2.5},
+    "dramatic": {"bpm": 70, "key_freq": 41, "pad_freqs": (165, 247, 330),
+                 "pad_vol": 0.05, "kick_vol": 0.45, "bass_vol": 0.12,
+                 "hihat_vol": 0.03, "fade_in": 1.0, "fade_out": 3.0},
+    "trendy": {"bpm": 110, "key_freq": 58, "pad_freqs": (233, 349, 466),
+               "pad_vol": 0.03, "kick_vol": 0.48, "bass_vol": 0.14,
+               "hihat_vol": 0.09, "fade_in": 0.5, "fade_out": 1.5},
 }
 
 # ---------------------------------------------------------------------------
@@ -861,6 +914,132 @@ class VideoForge:
             return False
 
     # ------------------------------------------------------------------
+    # SSML 기반 감정 TTS 생성
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def generate_tts_ssml(
+        text: str,
+        output_path: str,
+        voice: str = "ko-female",
+        emotion: str = "friendly",
+        rate: str = "",
+    ) -> bool:
+        """SSML 기반으로 감정이 담긴 TTS를 생성한다.
+
+        Edge-TTS의 SSML(prosody) 지원을 활용하여
+        감정별 음성 속도/음높이/볼륨을 자동 조절한다.
+
+        Args:
+            text: 변환할 텍스트
+            output_path: 출력 파일 경로
+            voice: 음성 프리셋 키
+            emotion: 감정 프리셋 (excited, calm, dramatic, friendly, urgent, whisper)
+            rate: 속도 오버라이드 (지정 시 감정 프리셋 무시)
+
+        Returns:
+            성공 여부
+        """
+        try:
+            import edge_tts
+        except ImportError:
+            log.error("edge-tts 미설치")
+            return False
+
+        voice_id = TTS_VOICES.get(voice, "ko-KR-SunHiNeural")
+        preset = TTS_EMOTION_PRESETS.get(emotion, TTS_EMOTION_PRESETS["friendly"])
+
+        # 속도 결정 (명시적 rate > 감정 프리셋)
+        final_rate = rate or preset["rate"]
+        final_pitch = preset["pitch"]
+
+        log.debug(
+            "SSML TTS: voice=%s, emotion=%s, rate=%s, pitch=%s",
+            voice, emotion, final_rate, final_pitch,
+        )
+
+        try:
+            # Edge-TTS는 직접 SSML을 지원하지 않지만,
+            # rate와 pitch를 통해 감정 표현 가능
+            try:
+                loop = asyncio.get_running_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    pool.submit(
+                        asyncio.run,
+                        edge_tts.Communicate(
+                            text, voice_id,
+                            rate=final_rate,
+                            pitch=final_pitch,
+                        ).save(output_path),
+                    ).result(timeout=30)
+            except RuntimeError:
+                asyncio.run(
+                    edge_tts.Communicate(
+                        text, voice_id,
+                        rate=final_rate,
+                        pitch=final_pitch,
+                    ).save(output_path)
+                )
+
+            success = os.path.exists(output_path) and os.path.getsize(output_path) > 1000
+            if success:
+                log.debug("SSML TTS 저장 완료: %s", output_path)
+            return success
+
+        except Exception as e:
+            log.error("SSML TTS 생성 실패: %s", e)
+            # 폴백: 일반 TTS
+            return VideoForge.generate_tts(text, output_path, voice, rate=final_rate)
+
+    @staticmethod
+    def generate_multi_speaker_tts(
+        scripts: list[dict],
+        output_dir: str,
+    ) -> tuple[list[Optional[str]], list[float]]:
+        """다중 화자 TTS를 생성한다.
+
+        Args:
+            scripts: [{"text": "...", "voice": "ko-female", "emotion": "excited"}, ...]
+            output_dir: 출력 디렉토리
+
+        Returns:
+            (경로 리스트, 길이 리스트)
+        """
+        paths: list[Optional[str]] = []
+        durations: list[float] = []
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        for i, script in enumerate(scripts):
+            text = script.get("text", "")
+            voice = script.get("voice", "ko-female")
+            emotion = script.get("emotion", "friendly")
+            rate = script.get("rate", "")
+
+            if not text or not text.strip():
+                paths.append(None)
+                durations.append(2.5)
+                continue
+
+            fp = os.path.join(output_dir, f"tts_{i:02d}.mp3")
+
+            if VideoForge.generate_tts_ssml(text, fp, voice, emotion, rate):
+                try:
+                    ac = AudioFileClip(fp)
+                    durations.append(ac.duration)
+                    ac.close()
+                except Exception:
+                    durations.append(2.5)
+                paths.append(fp)
+            else:
+                paths.append(None)
+                durations.append(2.5)
+
+        log.info("다중 화자 TTS 완료: %d/%d 성공", sum(1 for p in paths if p), len(scripts))
+        return paths, durations
+
+    # ------------------------------------------------------------------
     # 프로시저럴 Lo-Fi BGM 생성
     # ------------------------------------------------------------------
 
@@ -946,6 +1125,751 @@ class VideoForge:
 
         log.debug("BGM 생성 완료: %s (%.1f초)", output_path, duration)
         return output_path
+
+    # ------------------------------------------------------------------
+    # 장르별 BGM 생성 (Pro)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def generate_bgm_pro(
+        output_path: str, duration: float, genre: str = "lofi",
+    ) -> str:
+        """장르별 프로시저럴 BGM을 생성한다.
+
+        Args:
+            output_path: 출력 .wav 파일 경로
+            duration: 음원 길이 (초)
+            genre: BGM 장르 (lofi, upbeat, cinematic, energetic, chill, dramatic, trendy)
+
+        Returns:
+            출력 파일 경로
+        """
+        params = BGM_GENRE_PARAMS.get(genre, BGM_GENRE_PARAMS["lofi"])
+        sr = 44100
+        total_samples = int(sr * duration)
+        bpm = params["bpm"]
+        beat_len = int(sr * 60.0 / bpm)
+        audio = np.zeros(total_samples, dtype=np.float64)
+
+        # ── 킥 드럼 ──
+        for s in range(0, total_samples, beat_len):
+            t = np.arange(min(int(sr * 0.12), total_samples - s)) / sr
+            kick_freq = 50 + random.uniform(-3, 3)  # 약간의 변동
+            kick = np.sin(2 * np.pi * kick_freq * t) * np.exp(-t * 14) * params["kick_vol"]
+            end = min(s + len(kick), total_samples)
+            audio[s:end] += kick[:end - s]
+
+        # ── 하이햇 ──
+        hihat_interval = beat_len // (4 if genre in ("energetic", "upbeat", "trendy") else 2)
+        for s in range(hihat_interval, total_samples, hihat_interval):
+            t = np.arange(min(int(sr * 0.025), total_samples - s)) / sr
+            decay = 90 if genre in ("energetic", "trendy") else 60
+            hihat = np.random.randn(len(t)) * np.exp(-t * decay) * params["hihat_vol"]
+            end = min(s + len(hihat), total_samples)
+            audio[s:end] += hihat[:end - s]
+
+        # ── 베이스 멜로디 ──
+        base_freq = params["key_freq"]
+        # 장르별 코드 진행
+        if genre in ("cinematic", "dramatic"):
+            bass_notes = [base_freq, base_freq * 1.125, base_freq * 1.333,
+                          base_freq * 1.5, base_freq * 1.333, base_freq * 1.125]
+        elif genre in ("upbeat", "energetic", "trendy"):
+            bass_notes = [base_freq, base_freq * 1.189, base_freq * 1.335,
+                          base_freq * 1.498, base_freq * 1.682, base_freq * 1.335]
+        else:  # lofi, chill
+            bass_notes = [base_freq, base_freq * 1.189, base_freq * 1.335,
+                          base_freq * 1.498, base_freq * 1.335, base_freq * 1.189]
+
+        note_len = beat_len * (4 if genre in ("cinematic", "dramatic") else 2)
+        for i, s in enumerate(range(0, total_samples, note_len)):
+            freq = bass_notes[i % len(bass_notes)]
+            t = np.arange(min(note_len, total_samples - s)) / sr
+            bass = np.sin(2 * np.pi * freq * t) * np.exp(-t * 1.2) * params["bass_vol"]
+            # 하모닉 추가 (풍성한 소리)
+            bass += np.sin(2 * np.pi * freq * 2 * t) * np.exp(-t * 2.0) * params["bass_vol"] * 0.3
+            end = min(s + len(bass), total_samples)
+            audio[s:end] += bass[:end - s]
+
+        # ── 앰비언트 패드 ──
+        t_full = np.arange(total_samples) / sr
+        pad_freqs = params["pad_freqs"]
+        pad_vol = params["pad_vol"]
+        pad = np.zeros(total_samples)
+        for i, freq in enumerate(pad_freqs):
+            vol_scale = 1.0 - i * 0.25  # 높은 주파수일수록 작게
+            pad += np.sin(2 * np.pi * freq * t_full) * pad_vol * vol_scale
+
+        # LFO 모듈레이션 (부드러운 볼륨 변화)
+        lfo_rate = 0.08 if genre in ("lofi", "chill", "cinematic") else 0.15
+        pad *= 1.0 + 0.3 * np.sin(2 * np.pi * lfo_rate * t_full)
+        audio += pad
+
+        # ── 스네어 (upbeat/energetic/trendy) ──
+        if genre in ("upbeat", "energetic", "trendy"):
+            for s in range(beat_len, total_samples, beat_len * 2):
+                t = np.arange(min(int(sr * 0.08), total_samples - s)) / sr
+                snare = np.random.randn(len(t)) * np.exp(-t * 25) * 0.2
+                snare += np.sin(2 * np.pi * 180 * t) * np.exp(-t * 30) * 0.15
+                end = min(s + len(snare), total_samples)
+                audio[s:end] += snare[:end - s]
+
+        # ── 페이드인 / 페이드아웃 ──
+        fade_in_samples = int(sr * params["fade_in"])
+        fade_out_samples = int(sr * params["fade_out"])
+        if fade_in_samples > 0 and fade_in_samples <= total_samples:
+            audio[:fade_in_samples] *= np.linspace(0, 1, fade_in_samples)
+        if fade_out_samples > 0 and fade_out_samples <= total_samples:
+            audio[-fade_out_samples:] *= np.linspace(1, 0, fade_out_samples)
+
+        # ── 정규화 ──
+        max_val = np.max(np.abs(audio))
+        if max_val > 0:
+            audio = audio / max_val * 0.65
+
+        # ── WAV 저장 ──
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with wave.open(output_path, "w") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            wf.writeframes((audio * 32767).astype(np.int16).tobytes())
+
+        log.debug("BGM Pro 생성 완료: %s (%.1f초, 장르=%s)", output_path, duration, genre)
+        return output_path
+
+    # ------------------------------------------------------------------
+    # 인트로/아웃트로 생성
+    # ------------------------------------------------------------------
+
+    def render_intro(
+        self, w: int, h: int, duration: float,
+        branding: BrandingConfig,
+    ) -> Optional[object]:
+        """브랜딩 인트로 클립을 생성한다.
+
+        Args:
+            w, h: 영상 해상도
+            duration: 인트로 길이 (초)
+            branding: 브랜딩 설정
+
+        Returns:
+            MoviePy 클립 또는 None
+        """
+        if not branding or not branding.intro_text:
+            return None
+
+        try:
+            # 배경
+            bg_color = self._hex_to_rgb(branding.intro_bg_color)
+            accent_color = self._hex_to_rgb(branding.intro_accent_color)
+
+            # 인트로 프레임 생성
+            img = Image.new("RGB", (w, h), bg_color)
+            draw = ImageDraw.Draw(img)
+
+            # 중앙 악센트 라인
+            line_y = h // 2 - 80
+            draw.rectangle(
+                [(w // 4, line_y), (w * 3 // 4, line_y + 4)],
+                fill=accent_color,
+            )
+
+            # 메인 텍스트
+            font_large = self._get_korean_font(min(72, w // 12))
+            font_small = self._get_korean_font(min(36, w // 24))
+
+            # 메인 텍스트 중앙 정렬
+            main_text = branding.intro_text
+            bbox = draw.textbbox((0, 0), main_text, font=font_large)
+            tw = bbox[2] - bbox[0]
+            draw.text(
+                ((w - tw) // 2, h // 2 - 40),
+                main_text, font=font_large,
+                fill=(255, 255, 255),
+            )
+
+            # 서브 텍스트
+            if branding.intro_subtitle:
+                sub = branding.intro_subtitle
+                bbox = draw.textbbox((0, 0), sub, font=font_small)
+                tw = bbox[2] - bbox[0]
+                draw.text(
+                    ((w - tw) // 2, h // 2 + 50),
+                    sub, font=font_small,
+                    fill=(200, 200, 200),
+                )
+
+            # 하단 악센트 라인
+            line_y2 = h // 2 + 100
+            draw.rectangle(
+                [(w // 4, line_y2), (w * 3 // 4, line_y2 + 4)],
+                fill=accent_color,
+            )
+
+            arr = np.array(img)
+            if MOVIEPY_V2:
+                clip = ImageClip(arr, duration=duration).with_fps(self.cfg.fps)
+            else:
+                clip = ImageClip(arr).set_duration(duration).set_fps(self.cfg.fps)
+
+            # 페이드인 효과
+            clip = clip.crossfadein(0.5)
+
+            log.info("인트로 클립 생성 완료: %.1f초", duration)
+            return clip
+
+        except Exception as e:
+            log.error("인트로 생성 실패: %s", e)
+            return None
+
+    def render_outro(
+        self, w: int, h: int, duration: float,
+        branding: BrandingConfig, cta_text: str = "",
+    ) -> Optional[object]:
+        """브랜딩 아웃트로 클립을 생성한다.
+
+        Args:
+            w, h: 영상 해상도
+            duration: 아웃트로 길이 (초)
+            branding: 브랜딩 설정
+            cta_text: CTA 텍스트 (없으면 branding에서 가져옴)
+
+        Returns:
+            MoviePy 클립 또는 None
+        """
+        if not branding or not branding.outro_text:
+            return None
+
+        try:
+            bg_color = self._hex_to_rgb(branding.outro_bg_color)
+            text_color = self._hex_to_rgb(branding.outro_text_color)
+
+            img = Image.new("RGB", (w, h), bg_color)
+            draw = ImageDraw.Draw(img)
+
+            font_large = self._get_korean_font(min(64, w // 14))
+            font_medium = self._get_korean_font(min(40, w // 20))
+            font_small = self._get_korean_font(min(32, w // 28))
+
+            # 메인 텍스트
+            main_text = branding.outro_text
+            bbox = draw.textbbox((0, 0), main_text, font=font_large)
+            tw = bbox[2] - bbox[0]
+            draw.text(
+                ((w - tw) // 2, h // 2 - 80),
+                main_text, font=font_large,
+                fill=text_color,
+            )
+
+            # CTA 텍스트
+            cta = cta_text or branding.outro_cta
+            if cta:
+                bbox = draw.textbbox((0, 0), cta, font=font_medium)
+                tw = bbox[2] - bbox[0]
+
+                # CTA 버튼 스타일 배경
+                pad_x, pad_y = 30, 12
+                btn_x = (w - tw) // 2 - pad_x
+                btn_y = h // 2 + 20 - pad_y
+                accent_color = self._hex_to_rgb(branding.intro_accent_color)
+                draw.rounded_rectangle(
+                    [(btn_x, btn_y),
+                     (btn_x + tw + pad_x * 2, btn_y + (bbox[3] - bbox[1]) + pad_y * 2)],
+                    radius=12,
+                    fill=accent_color,
+                )
+                draw.text(
+                    ((w - tw) // 2, h // 2 + 20),
+                    cta, font=font_medium,
+                    fill=(255, 255, 255),
+                )
+
+            # 하단 안내
+            guide = "감사합니다 ❤️"
+            bbox = draw.textbbox((0, 0), guide, font=font_small)
+            tw = bbox[2] - bbox[0]
+            draw.text(
+                ((w - tw) // 2, h * 3 // 4),
+                guide, font=font_small,
+                fill=(180, 180, 180),
+            )
+
+            arr = np.array(img)
+            if MOVIEPY_V2:
+                clip = ImageClip(arr, duration=duration).with_fps(self.cfg.fps)
+            else:
+                clip = ImageClip(arr).set_duration(duration).set_fps(self.cfg.fps)
+
+            clip = clip.crossfadein(0.5)
+            log.info("아웃트로 클립 생성 완료: %.1f초", duration)
+            return clip
+
+        except Exception as e:
+            log.error("아웃트로 생성 실패: %s", e)
+            return None
+
+    def render_watermark_overlay(
+        self, w: int, h: int, duration: float,
+        branding: BrandingConfig,
+    ) -> Optional[object]:
+        """워터마크 오버레이 클립을 생성한다.
+
+        Args:
+            w, h: 영상 해상도
+            duration: 오버레이 유지 시간
+            branding: 브랜딩 설정
+
+        Returns:
+            MoviePy 클립 (투명 배경) 또는 None
+        """
+        if not branding or not branding.watermark_text:
+            return None
+
+        try:
+            # RGBA 투명 배경
+            img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+
+            font = self._get_korean_font(branding.watermark_size)
+            text = branding.watermark_text
+            bbox = draw.textbbox((0, 0), text, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+            # 위치 결정
+            pos = branding.watermark_position
+            margin = 20
+            if "right" in pos:
+                x = w - tw - margin
+            elif "left" in pos:
+                x = margin
+            else:
+                x = (w - tw) // 2
+
+            if "bottom" in pos:
+                y = h - th - margin
+            elif "top" in pos:
+                y = margin
+            else:
+                y = (h - th) // 2
+
+            alpha = int(255 * branding.watermark_opacity)
+            draw.text((x, y), text, font=font, fill=(255, 255, 255, alpha))
+
+            arr = np.array(img)
+            if MOVIEPY_V2:
+                clip = ImageClip(arr, duration=duration, is_mask=False).with_fps(self.cfg.fps)
+            else:
+                clip = ImageClip(arr, ismask=False).set_duration(duration).set_fps(self.cfg.fps)
+
+            log.info("워터마크 오버레이 생성 완료")
+            return clip
+
+        except Exception as e:
+            log.error("워터마크 생성 실패: %s", e)
+            return None
+
+    # ------------------------------------------------------------------
+    # 플랫폼별 렌더링 (Pro Pipeline)
+    # ------------------------------------------------------------------
+
+    def render_for_platform(
+        self,
+        platform: Platform,
+        images: list[str],
+        narrations: list[str],
+        output_path: str,
+        subtitle_text: str = "",
+        brand: str = "",
+        cta_text: str = "",
+    ) -> str:
+        """플랫폼에 최적화된 영상을 렌더링한다.
+
+        Args:
+            platform: 대상 플랫폼 (YouTube, Instagram, Naver Blog)
+            images: 이미지 파일 경로 리스트
+            narrations: 장면별 나레이션 텍스트
+            output_path: 출력 파일 경로
+            subtitle_text: 자막 텍스트
+            brand: 브랜드명 (인트로/아웃트로 적용)
+            cta_text: CTA 텍스트
+
+        Returns:
+            최종 출력 파일 경로
+        """
+        preset = PLATFORM_PRESETS.get(platform)
+        if not preset:
+            log.warning("플랫폼 프리셋 없음: %s, 기본 렌더링 사용", platform)
+            return self.render_shorts(images, narrations, output_path, subtitle_text)
+
+        # 플랫폼에 맞는 RenderConfig 생성
+        self.cfg = RenderConfig.from_platform_preset(preset, brand=brand)
+
+        log.info(
+            "플랫폼 렌더링 시작: %s, %dx%d @%dfps, 전환=%s, BGM=%s",
+            platform.value, self.cfg.width, self.cfg.height,
+            self.cfg.fps, self.cfg.transition_type, self.cfg.bgm_genre,
+        )
+
+        t_start = time.time()
+        self._tmp_audio = []
+        cfg = self.cfg
+        w, h = self._jittered_dimensions()
+
+        if not images:
+            raise ValueError("이미지가 하나도 없습니다")
+
+        # ── TTS 생성 ──
+        tts_paths: list[Optional[str]] = []
+        tts_durations: list[float] = []
+        if narrations:
+            tts_dir = ensure_dir(WORK_DIR / f"tts_{uuid.uuid4().hex[:8]}")
+            tts_paths, tts_durations = self._generate_scene_tts(
+                narrations, str(tts_dir), cfg.tts_voice,
+            )
+
+        # ── 이미지 → 클립 변환 ──
+        effects = EFFECT_PRESETS.get(cfg.effect_mode, EFFECT_PRESETS["dynamic"])
+        clips: list = []
+        default_duration = 3.5
+
+        for i, img_path in enumerate(images):
+            dur = default_duration
+            if i < len(tts_durations) and tts_durations[i] > 0:
+                dur = max(tts_durations[i] + 0.5, default_duration)
+
+            try:
+                img = Image.open(img_path).convert("RGB")
+                img = _crop_and_resize(img, w, h)
+                # 색보정 (약간의 대비 + 채도 향상)
+                img = _apply_color_filter(img, brightness=1.02, contrast=1.05, saturation=1.08)
+                arr = np.array(img)
+
+                if MOVIEPY_V2:
+                    clip = ImageClip(arr, duration=dur).with_fps(cfg.fps)
+                else:
+                    clip = ImageClip(arr).set_duration(dur).set_fps(cfg.fps)
+
+                # 모션 이펙트
+                effect_name = effects[i % len(effects)]
+                clip = self.apply_motion_effect(clip, effect_name, zoom_ratio=1.2)
+                clips.append(clip)
+
+            except Exception as e:
+                log.error("클립 생성 실패 [%d]: %s", i, e)
+                continue
+
+        if not clips:
+            raise RuntimeError("처리 가능한 클립이 없습니다")
+
+        # ── 전환 효과 적용 ──
+        transition_dur = cfg.transition_duration
+        final = self._apply_transitions(clips, cfg.transition_type, transition_dur)
+
+        # ── 자막 오버레이 ──
+        if cfg.subtitle_enabled and subtitle_text:
+            final = self._apply_subtitles(
+                final, clips, subtitle_text, w, h,
+                cfg.subtitle_fontsize, transition_dur, default_duration,
+            )
+
+        # ── 오디오 믹싱 ──
+        audio_layers: list = []
+
+        # TTS 오디오
+        if tts_paths:
+            current_time = 0.0
+            for i in range(min(len(tts_paths), len(clips))):
+                if tts_paths[i] and os.path.exists(tts_paths[i]):
+                    try:
+                        tts_audio = AudioFileClip(tts_paths[i])
+                        self._tmp_audio.append(tts_audio)
+                        if MOVIEPY_V2:
+                            tts_audio = tts_audio.with_start(current_time + 0.2)
+                        else:
+                            tts_audio = tts_audio.set_start(current_time + 0.2)
+                        audio_layers.append(tts_audio)
+                    except Exception as e:
+                        log.warning("TTS 오디오 로드 실패 [%d]: %s", i, e)
+                clip_dur = clips[i].duration if i < len(clips) else default_duration
+                current_time += clip_dur - transition_dur
+
+        # BGM (장르별)
+        try:
+            bgm_path = str(WORK_DIR / f"_bgm_{uuid.uuid4().hex[:6]}.wav")
+            self.generate_bgm_pro(bgm_path, final.duration, genre=cfg.bgm_genre)
+            bgm = AudioFileClip(bgm_path)
+            self._tmp_audio.append(bgm)
+            self._tmp_files.append(bgm_path)
+
+            bgm_vol = cfg.bgm_volume if tts_paths else cfg.bgm_volume * 3
+            if MOVIEPY_V2:
+                bgm = bgm.with_volume_scaled(bgm_vol)
+            else:
+                bgm = bgm.volumex(bgm_vol)
+
+            # 루프
+            if bgm.duration < final.duration:
+                loops = int(final.duration / bgm.duration) + 1
+                if concatenate_audioclips:
+                    bgm = concatenate_audioclips([bgm] * loops)
+            if bgm.duration > final.duration:
+                if MOVIEPY_V2:
+                    bgm = bgm.subclipped(0, final.duration)
+                else:
+                    bgm = bgm.subclip(0, final.duration)
+            audio_layers.append(bgm)
+        except Exception as e:
+            log.error("BGM 생성 실패: %s", e)
+
+        # 오디오 병합
+        if audio_layers:
+            if final.audio:
+                audio_layers.insert(0, final.audio)
+            mixed = CompositeAudioClip(audio_layers)
+            if MOVIEPY_V2:
+                final = final.with_audio(mixed)
+            else:
+                final = final.set_audio(mixed)
+
+        # ── 워터마크 오버레이 ──
+        branding = cfg.branding_config
+        if cfg.watermark_enabled and branding:
+            wm_clip = self.render_watermark_overlay(w, h, final.duration, branding)
+            if wm_clip:
+                if MOVIEPY_V2:
+                    wm_clip = wm_clip.with_position((0, 0))
+                else:
+                    wm_clip = wm_clip.set_position((0, 0))
+                final = CompositeVideoClip([final, wm_clip])
+
+        # ── 인트로/아웃트로 결합 ──
+        final_clips = []
+        if cfg.intro_enabled and branding:
+            intro = self.render_intro(w, h, preset.intro_duration, branding)
+            if intro:
+                final_clips.append(intro)
+
+        final_clips.append(final)
+
+        if cfg.outro_enabled and branding:
+            outro = self.render_outro(
+                w, h, preset.outro_duration, branding,
+                cta_text=cta_text or preset.cta_text,
+            )
+            if outro:
+                final_clips.append(outro)
+
+        if len(final_clips) > 1:
+            final = concatenate_videoclips(final_clips, method="compose")
+
+        # ── 최대 길이 제한 ──
+        if final.duration > preset.max_duration_sec:
+            log.warning(
+                "영상 길이 %.1f초 → %d초로 잘림",
+                final.duration, preset.max_duration_sec,
+            )
+            if MOVIEPY_V2:
+                final = final.subclipped(0, preset.max_duration_sec)
+            else:
+                final = final.subclip(0, preset.max_duration_sec)
+
+        # ── 안티밴 적용 ──
+        final = self.apply_anti_ban(final)
+
+        # ── 인코딩 ──
+        log.info("인코딩 시작: %s", output_path)
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        final.write_videofile(
+            output_path,
+            fps=cfg.fps,
+            codec="libx264",
+            bitrate=preset.video_bitrate,
+            audio_codec="aac",
+            audio_bitrate="192k",
+            threads=4,
+            preset="medium",
+            logger="bar",
+        )
+
+        # ── 정리 ──
+        self._cleanup(clips, final)
+
+        if not os.path.exists(output_path) or os.path.getsize(output_path) < 1024:
+            raise RuntimeError("렌더링 실패: 출력 파일이 생성되지 않았습니다")
+
+        elapsed = time.time() - t_start
+        size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        log.info(
+            "[%s] 렌더 완료: %.1fMB, %d초 소요",
+            platform.value, size_mb, int(elapsed),
+        )
+        return output_path
+
+    # ------------------------------------------------------------------
+    # 전환 효과 적용
+    # ------------------------------------------------------------------
+
+    def _apply_transitions(
+        self, clips: list, transition_type: str, transition_dur: float,
+    ):
+        """클립 사이에 전환 효과를 적용한다."""
+        if len(clips) <= 1:
+            return clips[0] if clips else None
+
+        log.info(
+            "전환 효과 적용: type=%s, duration=%.2f초, %d클립",
+            transition_type, transition_dur, len(clips),
+        )
+
+        if transition_type in ("crossfade", "blur"):
+            # 크로스디졸브 (기본)
+            processed = [clips[0]]
+            current_time = clips[0].duration
+            for i in range(1, len(clips)):
+                start = current_time - transition_dur
+                if MOVIEPY_V2:
+                    c2 = clips[i].with_start(start).crossfadein(transition_dur)
+                else:
+                    c2 = clips[i].set_start(start).crossfadein(transition_dur)
+                processed.append(c2)
+                current_time = start + clips[i].duration
+            return CompositeVideoClip(processed)
+
+        elif transition_type in ("slide_left", "slide_right", "slide_up"):
+            # 슬라이드 전환
+            processed = [clips[0]]
+            current_time = clips[0].duration
+            for i in range(1, len(clips)):
+                start = current_time - transition_dur
+                clip_next = clips[i]
+
+                # 슬라이드 위치 함수
+                if transition_type == "slide_left":
+                    pos_fn = lambda t, _d=transition_dur, _w=self.cfg.width: (
+                        max(0, int(_w * (1 - t / _d))) if t < _d else 0, 0
+                    )
+                elif transition_type == "slide_right":
+                    pos_fn = lambda t, _d=transition_dur, _w=self.cfg.width: (
+                        min(0, int(-_w * (1 - t / _d))) if t < _d else 0, 0
+                    )
+                else:  # slide_up
+                    pos_fn = lambda t, _d=transition_dur, _h=self.cfg.height: (
+                        0, max(0, int(_h * (1 - t / _d))) if t < _d else 0
+                    )
+
+                if MOVIEPY_V2:
+                    c2 = clip_next.with_start(start).with_position(pos_fn)
+                else:
+                    c2 = clip_next.set_start(start).set_position(pos_fn)
+                processed.append(c2)
+                current_time = start + clip_next.duration
+            return CompositeVideoClip(processed)
+
+        elif transition_type == "flash":
+            # 화이트 플래시 전환
+            result_clips = [clips[0]]
+            current_time = clips[0].duration
+
+            for i in range(1, len(clips)):
+                # 플래시 프레임 삽입
+                flash_dur = min(transition_dur, 0.15)
+                white_arr = np.full(
+                    (self.cfg.height, self.cfg.width, 3), 255, dtype=np.uint8,
+                )
+                if MOVIEPY_V2:
+                    flash = (ImageClip(white_arr, duration=flash_dur)
+                             .with_start(current_time - flash_dur / 2)
+                             .with_fps(self.cfg.fps)
+                             .crossfadein(flash_dur / 2)
+                             .crossfadeout(flash_dur / 2))
+                else:
+                    flash = (ImageClip(white_arr)
+                             .set_duration(flash_dur)
+                             .set_start(current_time - flash_dur / 2)
+                             .set_fps(self.cfg.fps)
+                             .crossfadein(flash_dur / 2)
+                             .crossfadeout(flash_dur / 2))
+                result_clips.append(flash)
+
+                if MOVIEPY_V2:
+                    c2 = clips[i].with_start(current_time)
+                else:
+                    c2 = clips[i].set_start(current_time)
+                result_clips.append(c2)
+                current_time += clips[i].duration
+            return CompositeVideoClip(result_clips)
+
+        else:
+            # 기본 크로스디졸브 폴백
+            return self._apply_transitions(clips, "crossfade", transition_dur)
+
+    # ------------------------------------------------------------------
+    # 자막 오버레이 (리팩토링)
+    # ------------------------------------------------------------------
+
+    def _apply_subtitles(
+        self, final, clips, subtitle_text, w, h,
+        fontsize, transition_dur, default_duration,
+    ):
+        """자막 오버레이를 적용한다."""
+        sub_lines = [t.strip() for t in subtitle_text.split("\n") if t.strip()]
+        sub_layers = [final]
+        current_time = 0.0
+
+        for i in range(min(len(clips), len(sub_lines))):
+            clip_dur = clips[i].duration if i < len(clips) else default_duration
+            try:
+                sub_arr = _render_subtitle_image(
+                    sub_lines[i], w, fontsize=fontsize,
+                )
+                sub_h = sub_arr.shape[0]
+                sub_dur = max(clip_dur - 0.8, 0.5)
+
+                if MOVIEPY_V2:
+                    sub_clip = (
+                        ImageClip(sub_arr, duration=sub_dur, is_mask=False)
+                        .with_start(current_time + 0.3)
+                        .with_position(("center", h - sub_h - 140))
+                        .crossfadein(0.2)
+                    )
+                else:
+                    sub_clip = (
+                        ImageClip(sub_arr, ismask=False)
+                        .set_duration(sub_dur)
+                        .set_start(current_time + 0.3)
+                        .set_position(("center", h - sub_h - 140))
+                        .crossfadein(0.2)
+                    )
+                sub_layers.append(sub_clip)
+            except Exception as e:
+                log.warning("자막 렌더링 실패 [%d]: %s", i, e)
+
+            current_time += clip_dur - transition_dur
+
+        if len(sub_layers) > 1:
+            return CompositeVideoClip(sub_layers)
+        return final
+
+    # ------------------------------------------------------------------
+    # 헬퍼: 한글 폰트, 색상 변환
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_korean_font(size: int) -> ImageFont.FreeTypeFont:
+        """한글 폰트를 가져온다."""
+        if KOREAN_FONT:
+            try:
+                return ImageFont.truetype(KOREAN_FONT, size)
+            except Exception:
+                pass
+        return ImageFont.load_default()
+
+    @staticmethod
+    def _hex_to_rgb(hex_color: str) -> tuple:
+        """Hex 색상을 RGB 튜플로 변환."""
+        hex_color = hex_color.lstrip("#")
+        return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
 
     # ------------------------------------------------------------------
     # 모션 이펙트

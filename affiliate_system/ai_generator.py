@@ -12,11 +12,15 @@ Claude 3 + Gemini 전용 (OpenAI 미사용)
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Callable, Optional
 
 from affiliate_system.config import GEMINI_API_KEY, ANTHROPIC_API_KEY, AI_ROUTING
-from affiliate_system.models import Product, AIContent, Campaign
+from affiliate_system.models import (
+    Product, AIContent, Campaign, Platform,
+    PlatformPreset, PLATFORM_PRESETS,
+)
 from affiliate_system.utils import setup_logger, retry
 from api_cost_tracker import CostTracker
 
@@ -450,6 +454,461 @@ class AIGenerator:
 
         logger.info(f"해시태그 {len(unique)}개 생성 완료")
         return unique
+
+    # ──────────────────────────────────────────────
+    # 플랫폼별 최적화 콘텐츠 생성
+    # ──────────────────────────────────────────────
+
+    def generate_platform_content(
+        self, product: Product, platform: Platform,
+        persona: str = "", brand: str = "",
+    ) -> dict:
+        """플랫폼에 최적화된 콘텐츠를 생성한다.
+
+        각 플랫폼의 글자수, 톤, 형식에 맞춘 콘텐츠를 생성한다.
+
+        Args:
+            product: 대상 상품 정보
+            platform: 대상 플랫폼
+            persona: 화자 페르소나
+            brand: 브랜드명 (자사 브랜드인 경우)
+
+        Returns:
+            {"title", "body", "hashtags", "narration", "cta", "thumbnail_text"}
+        """
+        preset = PLATFORM_PRESETS.get(platform)
+        if not preset:
+            raise ValueError(f"지원하지 않는 플랫폼: {platform}")
+
+        if platform == Platform.YOUTUBE:
+            return self._generate_shorts_content(product, preset, persona, brand)
+        elif platform == Platform.INSTAGRAM:
+            return self._generate_reels_content(product, preset, persona, brand)
+        elif platform == Platform.NAVER_BLOG:
+            return self._generate_blog_content(product, preset, persona, brand)
+        else:
+            raise ValueError(f"지원하지 않는 플랫폼: {platform}")
+
+    def _generate_shorts_content(
+        self, product: Product, preset: PlatformPreset,
+        persona: str = "", brand: str = "",
+    ) -> dict:
+        """YouTube Shorts 최적화 콘텐츠를 생성한다.
+
+        - 제목: 100자 이내, 검색 최적화 키워드 포함
+        - 설명: 첫 2줄이 중요 (접히므로), 해시태그 3~10개
+        - 나레이션: 5~7장면, 빠른 템포
+        - 썸네일 텍스트: 7자 이내 임팩트 문구
+        """
+        persona_line = f"\n화자 페르소나: {persona}" if persona else ""
+        brand_line = f"\n브랜드: {brand}" if brand else ""
+
+        # 제목 + 설명 + 나레이션 + 해시태그 + 썸네일 한 번에 생성
+        prompt = f"""당신은 한국어 YouTube Shorts 전문 크리에이터입니다.
+아래 상품으로 Shorts 콘텐츠 전체를 생성하세요.{persona_line}{brand_line}
+
+상품명: {product.title}
+가격: {product.price}
+설명: {product.description[:400] if product.description else '(없음)'}
+
+반드시 아래 5개 섹션을 모두 빠짐없이 작성하세요:
+
+[제목]
+이모지 포함, 100자 이내 Shorts 제목
+
+[설명]
+핵심 메시지와 CTA 포함 200자 이내 설명문
+
+[나레이션]
+[장면1] 충격 도입 한 줄
+[장면2] 상품 소개 한 줄
+[장면3] 핵심 장점 한 줄
+[장면4] 가격 혜택 한 줄
+[장면5] 구독 유도 CTA 한 줄
+
+[해시태그]
+#해시태그1 #해시태그2 #해시태그3 #해시태그4 #해시태그5 #해시태그6 #해시태그7
+
+[썸네일]
+7자 이내 임팩트 문구
+15자 이내 부제"""
+
+        raw = self._call_with_fallback(
+            primary_fn=self._call_gemini,
+            fallback_fn=lambda prompt, **kw: self._call_claude(
+                model=CLAUDE_HAIKU, prompt=prompt, **kw),
+            prompt=prompt,
+            max_tokens=4096,
+            temperature=0.8,
+        )
+
+        return self._parse_platform_response(raw, "youtube")
+
+    def _generate_reels_content(
+        self, product: Product, preset: PlatformPreset,
+        persona: str = "", brand: str = "",
+    ) -> dict:
+        """Instagram Reels 최적화 콘텐츠를 생성한다.
+
+        - 캡션: 2200자 이내, 감성적 톤, 이모지 풍부
+        - 해시태그: 15~25개 (최대 30개)
+        - 나레이션: 감성적 + 트렌디
+        - 썸네일: 감성 비주얼
+        """
+        persona_line = f"\n화자 페르소나: {persona}" if persona else ""
+        brand_line = f"\n브랜드: {brand}" if brand else ""
+
+        prompt = f"""당신은 한국어 Instagram Reels 전문 크리에이터입니다.
+아래 상품으로 Instagram Reels 콘텐츠 전체를 작성하세요.{persona_line}{brand_line}
+
+상품명: {product.title}
+가격: {product.price}
+설명: {product.description[:400] if product.description else '(없음)'}
+
+반드시 아래 5개 섹션을 모두 빠짐없이 작성하세요:
+
+[제목]
+이모지 포함 릴스 제목 (50자 이내, 감성적이고 트렌디하게)
+
+[캡션]
+이모지와 줄바꿈을 활용한 감성적 캡션을 300~500자로 작성하세요.
+상품의 매력을 감각적으로 표현하고, 마지막에 "저장하고 나중에 참고하세요!" 같은 CTA를 넣으세요.
+
+[나레이션]
+[장면1] 트렌디한 도입 인사 한 줄
+[장면2] 상품 비주얼 포인트 한 줄
+[장면3] 핵심 장점 한 줄
+[장면4] 가격 혜택 한 줄
+[장면5] 저장/팔로우 유도 CTA 한 줄
+
+[해시태그]
+#태그1 #태그2 #태그3 #태그4 #태그5 #태그6 #태그7 #태그8 #태그9 #태그10 #태그11 #태그12 #태그13 #태그14 #태그15
+
+[썸네일]
+감성적 임팩트 문구 7자 이내
+부제 15자 이내"""
+
+        raw = self._call_with_fallback(
+            primary_fn=self._call_gemini,
+            fallback_fn=lambda prompt, **kw: self._call_claude(
+                model=CLAUDE_HAIKU, prompt=prompt, **kw),
+            prompt=prompt,
+            max_tokens=4096,
+            temperature=0.8,
+        )
+
+        return self._parse_platform_response(raw, "instagram")
+
+    def _generate_blog_content(
+        self, product: Product, preset: PlatformPreset,
+        persona: str = "", brand: str = "",
+    ) -> dict:
+        """네이버 블로그 최적화 콘텐츠를 생성한다.
+
+        - 제목: SEO 키워드 포함, 100자 이내
+        - 본문: 3000~5000자, 소제목/이미지 위치 표시
+        - 해시태그: 10개 이하
+        - 영상 나레이션: 느린 템포, 상세 설명
+        """
+        persona_line = f"\n화자 페르소나: {persona}" if persona else ""
+        brand_line = f"\n브랜드: {brand}" if brand else ""
+
+        prompt = f"""네이버 블로그 포스팅 콘텐츠를 아래 형식 그대로 작성하세요.
+{persona_line}{brand_line}
+
+상품명: {product.title}
+가격: {product.price}
+설명: {product.description[:500] if product.description else '(없음)'}
+구매 링크: {product.affiliate_link or '(추후 삽입)'}
+
+반드시 아래 형식을 지켜서 출력하세요:
+
+[제목]
+네이버 SEO 최적화 제목, 핵심 키워드 앞배치
+
+[본문]
+안녕하세요! 오늘은 (상품명) 소개합니다.
+
+## 상품 소개
+상품 기본 정보, 특징...
+
+## 핵심 장점
+장점 3가지를 상세히...
+
+## 가격 및 구매
+가격, 할인, 구매처 안내...
+
+## 마무리
+CTA + 링크 안내
+(총 1500~3000자)
+
+[나레이션]
+[장면1] 블로그 영상 인트로 20자 이내
+[장면2] 상품 소개 20자 이내
+[장면3] 핵심 장점 20자 이내
+[장면4] 가격 혜택 20자 이내
+[장면5] 구매 안내 20자 이내
+[장면6] 마무리 인사 15자 이내
+
+[해시태그]
+#태그1 #태그2 ... (5~10개)
+
+[썸네일]
+정보성 문구 10자 이내
+부제 20자 이내"""
+
+        raw = self._call_with_fallback(
+            primary_fn=self._call_gemini,
+            fallback_fn=lambda prompt, **kw: self._call_claude(
+                model=CLAUDE_HAIKU, prompt=prompt, **kw),
+            prompt=prompt,
+            max_tokens=8192,
+            temperature=0.7,
+        )
+
+        return self._parse_platform_response(raw, "naver_blog")
+
+    def generate_all_platform_content(
+        self, product: Product, persona: str = "", brand: str = "",
+    ) -> dict[str, dict]:
+        """모든 플랫폼용 콘텐츠를 한 번에 생성한다.
+
+        Returns:
+            {"youtube": {...}, "instagram": {...}, "naver_blog": {...}}
+        """
+        results: dict[str, dict] = {}
+
+        for platform in [Platform.YOUTUBE, Platform.INSTAGRAM, Platform.NAVER_BLOG]:
+            try:
+                logger.info(f"플랫폼 콘텐츠 생성: {platform.value}")
+                content = self.generate_platform_content(
+                    product, platform, persona=persona, brand=brand,
+                )
+                results[platform.value] = content
+                logger.info(f"플랫폼 콘텐츠 생성 완료: {platform.value}")
+            except Exception as e:
+                logger.error(f"플랫폼 콘텐츠 생성 실패 ({platform.value}): {e}")
+                results[platform.value] = {
+                    "title": "", "body": "", "hashtags": [],
+                    "narration": [], "cta": "", "thumbnail_text": "",
+                    "thumbnail_subtitle": "",
+                }
+
+        return results
+
+    def generate_thumbnail_text(self, product: Product, platform: Platform) -> tuple[str, str]:
+        """플랫폼에 맞는 썸네일 텍스트를 생성한다.
+
+        Returns:
+            (메인 텍스트, 서브 텍스트)
+        """
+        if platform == Platform.YOUTUBE:
+            spec = "7자 이내 충격적/호기심 유발 문구"
+        elif platform == Platform.INSTAGRAM:
+            spec = "7자 이내 감성적/트렌디한 문구"
+        else:
+            spec = "10자 이내 정보성 핵심 키워드"
+
+        prompt = f"""상품명: {product.title}
+
+이 상품의 {platform.value} 썸네일에 들어갈 텍스트를 생성하세요.
+
+[규격]
+- 메인 텍스트: {spec}
+- 부제: 15자 이내
+
+[출력 형식]
+메인: (텍스트)
+부제: (텍스트)"""
+
+        raw = self._call_gemini(prompt=prompt, max_tokens=256, temperature=0.9)
+
+        main_text = ""
+        sub_text = ""
+        for line in raw.strip().splitlines():
+            line = line.strip()
+            if line.startswith("메인:") or line.startswith("메인 :"):
+                main_text = line.split(":", 1)[1].strip().strip("()")
+            elif line.startswith("부제:") or line.startswith("부제 :"):
+                sub_text = line.split(":", 1)[1].strip().strip("()")
+
+        return main_text or product.title[:7], sub_text or product.title[:15]
+
+    # ──────────────────────────────────────────────
+    # 응답 파싱 유틸리티
+    # ──────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_platform_response(raw: str, platform: str) -> dict:
+        """플랫폼별 AI 응답을 파싱하여 구조화한다.
+
+        Gemini는 마크다운을 적극적으로 사용하므로 다양한 형식을 처리:
+        - ### [제목], ## [제목], **[제목]** 등 마크다운 래핑
+        - **[장면1] 지시사항** + 다음 줄에 실제 텍스트
+        - **나레이션:** 접두사
+        """
+        result = {
+            "title": "",
+            "body": "",
+            "hashtags": [],
+            "narration": [],
+            "cta": "",
+            "thumbnail_text": "",
+            "thumbnail_subtitle": "",
+        }
+
+        current_section = ""
+        body_lines: list[str] = []
+        narration_items: list[str] = []
+        hashtag_items: list[str] = []
+
+        # 섹션 매핑 (한국어 + 영어)
+        section_map = {
+            "title": ["[제목]", "[title]"],
+            "body": ["[설명]", "[캡션]", "[본문]", "[body]", "[caption]", "[description]"],
+            "narration": ["[나레이션]", "[narration]"],
+            "hashtag": ["[해시태그]", "[hashtag]", "[hashtags]"],
+            "thumbnail": ["[썸네일]", "[thumbnail]"],
+        }
+
+        def _clean_line(text: str) -> str:
+            """마크다운 접두사 제거: ###, ##, #, **, * 등"""
+            t = text.strip()
+            # ### / ## / # 헤더 제거
+            t = re.sub(r'^#{1,6}\s*', '', t)
+            # ** 볼드 래핑 제거 (양쪽)
+            t = re.sub(r'^\*\*(.+?)\*\*$', r'\1', t)
+            return t.strip()
+
+        def _detect_section(text: str) -> str:
+            """줄에서 섹션 헤더 감지. 발견 시 섹션명 반환, 아니면 빈 문자열."""
+            cleaned = _clean_line(text)
+            for section_name, markers in section_map.items():
+                for m in markers:
+                    if cleaned.lower().startswith(m.lower()):
+                        return section_name
+            return ""
+
+        def _clean_narration_text(text: str) -> str:
+            """나레이션 텍스트에서 지시사항/마크다운/따옴표 제거."""
+            t = text.strip()
+            # **나레이션:** 또는 **장면 설명:** 패턴 제거
+            t = re.sub(r'^\*\*[^*]*\*\*\s*', '', t)
+            # 괄호 안 지시사항 제거 (예: "(3초 이내 충격적 도입)")
+            t = re.sub(r'^\([^)]*\)\s*', '', t)
+            # 따옴표 제거 ("나레이션 텍스트" → 나레이션 텍스트)
+            t = t.strip('"\'')
+            # "블로그 영상 인트로:", "상품 소개:" 같은 지시 접두사 제거
+            t = re.sub(r'^(?:블로그\s*영상\s*인트로|상품\s*소개|핵심\s*장점|가격\s*혜택|구매\s*안내|마무리\s*인사)\s*:\s*', '', t).strip()
+            # "충격 도입 한 줄" 같은 프롬프트 지시가 남아있으면 건너뛰기
+            skip_patterns = [
+                "충격 도입 한 줄", "상품 소개 한 줄", "핵심 장점 한 줄",
+                "가격 혜택 한 줄", "구독 유도 CTA 한 줄", "한 줄",
+                "트렌디한 도입", "비주얼 포인트", "저장/팔로우",
+            ]
+            for sp in skip_patterns:
+                if t == sp:
+                    return ""
+            return t.strip()
+
+        for line in raw.strip().splitlines():
+            line_stripped = line.strip()
+
+            # 마크다운 접두 섹션 감지 (### [제목], ## [나레이션] 등)
+            section = _detect_section(line_stripped)
+            if section:
+                current_section = section
+                continue
+
+            if not line_stripped:
+                if current_section == "body":
+                    body_lines.append("")
+                continue
+
+            # 섹션별 파싱
+            if current_section == "title" and not result["title"]:
+                clean = _clean_line(line_stripped).strip("()")
+                if clean:
+                    result["title"] = clean
+
+            elif current_section == "body":
+                body_lines.append(line_stripped)
+
+            elif current_section == "narration":
+                cleaned = _clean_line(line_stripped)
+
+                # **[장면N] 지시사항** 패턴 (볼드 래핑된 장면 헤더)
+                bold_scene = re.match(r'^\*\*\[장면\d+\]\s*.*?\*\*$', line_stripped)
+                if bold_scene:
+                    # 이것은 지시사항만 있는 헤더 → 빈 슬롯 추가
+                    narration_items.append("")
+                    continue
+
+                # [장면N] 텍스트 패턴
+                if cleaned.startswith("[") and "]" in cleaned:
+                    bracket_content = cleaned[:cleaned.index("]") + 1]
+                    # 실제 섹션 헤더인지 확인
+                    if _detect_section(cleaned):
+                        current_section = _detect_section(cleaned)
+                        continue
+                    text = cleaned[cleaned.index("]") + 1:].strip()
+                    clean_text = _clean_narration_text(text)
+                    if clean_text:
+                        narration_items.append(clean_text)
+                    else:
+                        narration_items.append("")
+                else:
+                    # 이전 장면의 실제 텍스트 (다음 줄에 온 경우)
+                    clean_text = _clean_narration_text(cleaned)
+                    if clean_text:
+                        if narration_items and not narration_items[-1]:
+                            narration_items[-1] = clean_text
+                        elif narration_items:
+                            narration_items[-1] += " " + clean_text
+                        else:
+                            narration_items.append(clean_text)
+
+            elif current_section == "hashtag":
+                for token in line_stripped.split():
+                    token = token.strip(",.*# ")
+                    if not token:
+                        continue
+                    tag = f"#{token}" if not token.startswith("#") else token
+                    # #으로만 구성된 것 제거
+                    tag = tag.strip(",. ")
+                    if tag.startswith("#") and len(tag) > 1:
+                        hashtag_items.append(tag)
+
+            elif current_section == "thumbnail":
+                clean = _clean_line(line_stripped).strip("()")
+                # "**임팩트 문구:** 텍스트" or "정보성 문구: 텍스트" 같은 접두사 제거
+                clean = re.sub(r'^\*?\*?(?:임팩트\s*문구|감성적?\s*(?:임팩트\s*)?문구|정보성\s*문구|메인|부제)\s*:?\*?\*?\s*:?\s*', '', clean, flags=re.IGNORECASE).strip()
+                if clean and not result["thumbnail_text"]:
+                    result["thumbnail_text"] = clean
+                elif clean and not result["thumbnail_subtitle"]:
+                    result["thumbnail_subtitle"] = clean
+
+        # 빈 나레이션 항목 제거
+        narration_items = [n for n in narration_items if n.strip()]
+
+        result["body"] = "\n".join(body_lines).strip()
+        result["narration"] = narration_items
+        result["hashtags"] = list(dict.fromkeys(hashtag_items))  # 중복 제거
+
+        # CTA 추출 (본문 마지막 줄에서)
+        if body_lines:
+            last_lines = [l for l in body_lines[-3:] if l.strip()]
+            for l in reversed(last_lines):
+                if any(kw in l for kw in ["확인", "클릭", "구독", "팔로우", "저장", "방문"]):
+                    result["cta"] = l.strip()
+                    break
+
+        logger.info(
+            f"플랫폼 응답 파싱 완료 ({platform}): "
+            f"title={len(result['title'])}자, body={len(result['body'])}자, "
+            f"narration={len(result['narration'])}장면, hashtags={len(result['hashtags'])}개"
+        )
+        return result
 
     def translate_to_english(self, text: str) -> str:
         """한국어 텍스트를 영어로 번역한다 (Claude Haiku).
