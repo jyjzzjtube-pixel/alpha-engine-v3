@@ -2,6 +2,7 @@
 """
 통합 알림 엔진 — 데스크톱 + 텔레그램
 """
+import time
 import requests
 from typing import Optional, Callable
 
@@ -16,10 +17,14 @@ from ..database import Database
 class AlertEngine:
     """알림 발행 + 기록 + 전송"""
 
+    # 같은 source의 데스크톱 알림은 60초 쿨다운
+    DESKTOP_COOLDOWN = 60
+
     def __init__(self, db: Database):
         self.db = db
         self._tray_callback: Optional[Callable] = None
         self._ui_callback: Optional[Callable] = None
+        self._desktop_last: dict[str, float] = {}  # source -> last_time
 
     def set_tray_callback(self, cb: Callable):
         """시스템 트레이 알림 콜백 설정"""
@@ -43,9 +48,14 @@ class AlertEngine:
         # DB 기록
         alert.id = self.db.add_alert(alert)
 
-        # 데스크톱 알림
+        # 데스크톱 알림 (쿨다운 적용 — 같은 source 60초 내 중복 차단)
         if ALERT_DESKTOP_ENABLED and severity in (Severity.WARN, Severity.ERROR, Severity.CRITICAL):
-            self._send_desktop(alert)
+            now = time.time()
+            key = source or title
+            last = self._desktop_last.get(key, 0)
+            if now - last >= self.DESKTOP_COOLDOWN:
+                self._desktop_last[key] = now
+                self._send_desktop(alert)
 
         # 텔레그램 알림
         if ALERT_TELEGRAM_ENABLED and severity in (Severity.ERROR, Severity.CRITICAL):

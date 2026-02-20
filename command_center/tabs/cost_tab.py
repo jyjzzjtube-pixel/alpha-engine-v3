@@ -419,6 +419,10 @@ class CostTab(QWidget):
         self._btn_refresh.setEnabled(True)
         self._btn_refresh.setText("\U0001F504  새로고침")
 
+    def update_summary(self, summary: dict):
+        """main.py에서 호출하는 공개 메서드 — 비용 요약 카드만 업데이트."""
+        self._on_summary(summary)
+
     # ──────────────────────────── Helpers ────────────────────────────
 
     @staticmethod

@@ -8,7 +8,10 @@ YJ Partners 통합 커맨드센터
 """
 import sys
 import os
+import traceback
+import logging
 from pathlib import Path
+from datetime import datetime
 
 # 프로젝트 루트를 PYTHONPATH에 추가
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -106,7 +109,7 @@ class MainWindow(QMainWindow):
         # 탭 생성
         self.dashboard_tab = DashboardTab()
         self.site_tab = SiteTab()
-        self.bot_tab = BotTab()
+        self.bot_tab = BotTab(self.bot_manager)
         self.cost_tab = CostTab()
         self.order_tab = OrderTab()
         self.search_tab = SearchTab()
@@ -311,15 +314,64 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
 
+def _setup_logging():
+    """크래시 로그를 파일에 기록"""
+    log_dir = Path(__file__).resolve().parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / f"crash_{datetime.now().strftime('%Y%m%d')}.log"
+
+    logging.basicConfig(
+        filename=str(log_file),
+        level=logging.ERROR,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        encoding="utf-8",
+    )
+    return log_file
+
+
+def _exception_hook(exc_type, exc_value, exc_tb):
+    """전역 예외 핸들러 — pythonw.exe에서도 에러 기록"""
+    msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    logging.error(f"Unhandled exception:\n{msg}")
+    # 에러 다이얼로그 표시 (앱이 살아있을 때)
+    try:
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.critical(
+            None, "YJ Command Center 오류",
+            f"예기치 못한 오류가 발생했습니다:\n\n{exc_value}\n\n"
+            f"로그 파일을 확인하세요.",
+        )
+    except Exception:
+        pass
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+
 def main():
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    app.setStyleSheet(DARK_STYLESHEET)
+    log_file = _setup_logging()
+    sys.excepthook = _exception_hook
 
-    window = MainWindow()
-    window.show()
+    try:
+        app = QApplication(sys.argv)
+        app.setStyle("Fusion")
+        app.setStyleSheet(DARK_STYLESHEET)
 
-    sys.exit(app.exec())
+        window = MainWindow()
+        window.show()
+
+        sys.exit(app.exec())
+    except Exception as e:
+        msg = traceback.format_exc()
+        logging.error(f"Fatal startup error:\n{msg}")
+        # 최후의 에러 표시 시도
+        try:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                None, "YJ Command Center 시작 실패",
+                f"프로그램을 시작할 수 없습니다:\n\n{e}\n\n"
+                f"로그: {log_file}",
+            )
+        except Exception:
+            print(f"FATAL: {msg}", file=sys.stderr)
 
 
 if __name__ == "__main__":

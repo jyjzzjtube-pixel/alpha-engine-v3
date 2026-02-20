@@ -216,7 +216,6 @@ class AlertTab(QWidget):
 
         self._chk_deploy_complete = QCheckBox("배포 완료")
         self._chk_deploy_complete.setChecked(True)
-        settings_layout.addWidget(self._chk_bot_error, 1, 2)
         settings_layout.addWidget(self._chk_deploy_complete, 1, 3)
 
         # 행 2: 알림 채널

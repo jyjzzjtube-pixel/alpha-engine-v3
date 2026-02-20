@@ -314,6 +314,21 @@ class DashboardTab(QWidget):
         else:
             self._card_alerts.set_accent("#22c55e")
 
+    def update_alert_count(self, unread: int):
+        """미확인 알림 수 카드만 업데이트.
+
+        Args:
+            unread: 미확인 알림 수
+        """
+        self._card_alerts.set_value(
+            str(unread),
+            f"{unread}개 미확인" if unread > 0 else "알림 없음",
+        )
+        if unread > 0:
+            self._card_alerts.set_accent("#f59e0b")
+        else:
+            self._card_alerts.set_accent("#22c55e")
+
     def add_alert_item(self, text: str, level: str = "info"):
         """알림 리스트에 색상 코딩된 항목 추가.
 
