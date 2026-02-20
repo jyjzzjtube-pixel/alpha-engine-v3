@@ -25,7 +25,6 @@ build/
 *.png
 *.jpeg
 *.jpg
-!affiliate_system/workspace/jjin_deal_profile.png
 
 # Temporary Python scripts (root level only)
 /analyze_*.py
@@ -110,8 +109,7 @@ logs/
 */downloads/
 
 # Workspace temp files
-affiliate_system/workspace/*.txt
-affiliate_system/workspace/b64_chunk_*.txt
+affiliate_system/workspace/
 
 # Database files
 *.db
