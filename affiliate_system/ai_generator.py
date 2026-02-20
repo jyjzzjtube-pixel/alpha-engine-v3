@@ -897,6 +897,30 @@ CTA + 링크 안내
         result["narration"] = narration_items
         result["hashtags"] = list(dict.fromkeys(hashtag_items))  # 중복 제거
 
+        # 나레이션 폴백: Gemini가 나레이션을 1장면 이하로 반환했을 때
+        # 본문(캡션)을 기반으로 5장면 나레이션을 자동 분할 생성
+        if len(result["narration"]) < 2 and len(result["body"]) > 50:
+            logger.info(f"나레이션 폴백 실행 ({platform}): {len(result['narration'])}장면 → 본문 기반 분할")
+            body_text = result["body"]
+            # 문장 단위로 분할
+            sentences = re.split(r'[.!?。]\s*', body_text)
+            sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) > 5]
+            if len(sentences) >= 5:
+                # 5개 구간으로 균등 분할
+                chunk_size = max(1, len(sentences) // 5)
+                fallback_narr = []
+                for i in range(5):
+                    start = i * chunk_size
+                    end = start + chunk_size if i < 4 else len(sentences)
+                    chunk = " ".join(sentences[start:end])
+                    # 50자 이내로 자르기
+                    if len(chunk) > 50:
+                        chunk = chunk[:47] + "..."
+                    fallback_narr.append(chunk)
+                result["narration"] = fallback_narr
+            elif sentences:
+                result["narration"] = sentences[:5]
+
         # CTA 추출 (본문 마지막 줄에서)
         if body_lines:
             last_lines = [l for l in body_lines[-3:] if l.strip()]
