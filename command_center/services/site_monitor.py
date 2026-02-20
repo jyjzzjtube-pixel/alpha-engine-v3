@@ -46,11 +46,12 @@ class SiteMonitor:
             )
 
     def check_all(self, sites: List[dict] = None) -> List[SiteCheckResult]:
-        """모든 사이트 병렬 건강검진"""
+        """활성화된 사이트만 병렬 건강검진"""
         sites = sites or MANAGED_SITES
+        active = [s for s in sites if s.get("enabled", True)]
         results = []
         with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(self.check_site, s): s for s in sites}
+            futures = {executor.submit(self.check_site, s): s for s in active}
             for future in as_completed(futures):
                 results.append(future.result())
         # 원래 순서 유지

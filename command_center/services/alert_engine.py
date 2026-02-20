@@ -17,8 +17,8 @@ from ..database import Database
 class AlertEngine:
     """알림 발행 + 기록 + 전송"""
 
-    # 같은 source의 데스크톱 알림은 60초 쿨다운
-    DESKTOP_COOLDOWN = 60
+    # 같은 source의 데스크톱 알림은 5분 쿨다운
+    DESKTOP_COOLDOWN = 300
 
     def __init__(self, db: Database):
         self.db = db

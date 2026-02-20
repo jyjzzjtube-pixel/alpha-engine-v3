@@ -71,7 +71,8 @@ class SiteTab(QWidget):
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setSpacing(12)
 
-        for idx, site in enumerate(MANAGED_SITES):
+        active_sites = [s for s in MANAGED_SITES if s.get("enabled", True)]
+        for idx, site in enumerate(active_sites):
             card = SiteCard(
                 site_id=site["id"],
                 name=site["name"],
@@ -87,7 +88,7 @@ class SiteTab(QWidget):
             self._site_cards[site["id"]] = card
 
         # 빈 칸 스트레치
-        total_rows = (len(MANAGED_SITES) + 2) // 3
+        total_rows = (len(active_sites) + 2) // 3
         self._grid.setRowStretch(total_rows, 1)
 
         scroll.setWidget(grid_container)
@@ -192,7 +193,7 @@ class SiteTab(QWidget):
 
     def _on_deploy_all(self):
         """Netlify 사이트 전체 배포"""
-        netlify_sites = [s for s in MANAGED_SITES if s["type"] == "netlify"]
+        netlify_sites = [s for s in MANAGED_SITES if s["type"] == "netlify" and s.get("enabled", True)]
         if not netlify_sites:
             self._log("배포 가능한 Netlify 사이트가 없습니다.", "warning")
             return

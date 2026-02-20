@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # ── 경로 ──
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
-load_dotenv(PROJECT_DIR / ".env")
+load_dotenv(PROJECT_DIR / ".env", override=True)
 
 # ── API 키 ──
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -28,37 +28,51 @@ COMMAND_CENTER_DB = str(BASE_DIR / "command_center.db")
 # ── AI 하이브리드 설정 ──
 AI_PROVIDERS = {
     "gemini": {"model": "gemini-2.5-flash", "cost": "free", "priority": 1},
-    "claude_haiku": {"model": "claude-3-5-haiku-20241022", "cost": "low", "priority": 2},
-    "claude_sonnet": {"model": "claude-sonnet-4-20250514", "cost": "high", "priority": 3},
+    "claude_haiku": {"model": "claude-haiku-4-5-20251001", "cost": "low", "priority": 2},
+    "claude_sonnet": {"model": "claude-sonnet-4-6-20250610", "cost": "high", "priority": 3},
 }
 AI_FALLBACK_CHAIN = ["gemini", "claude_haiku", "claude_sonnet"]
 
 # ── 관리 사이트 ──
 MANAGED_SITES = [
-    {"id": "alpha-engine", "name": "Alpha Engine", "url": "https://alpha-engine.netlify.app",
-     "type": "netlify", "category": "finance", "source_dir": ""},
-    {"id": "yjtax-v8", "name": "YJ Tax v8", "url": "https://yjtax-v8.netlify.app",
-     "type": "netlify", "category": "tax", "source_dir": "yjtax_v8_extracted"},
-    {"id": "yj-partners", "name": "YJ Partners MCN", "url": "https://yj-partners.netlify.app",
-     "type": "netlify", "category": "mcn", "source_dir": ""},
-    {"id": "bridgeone", "name": "Bridge One", "url": "https://bridgeone-franchise.netlify.app",
-     "type": "netlify", "category": "franchise", "source_dir": ""},
-    {"id": "founderone", "name": "Founder One", "url": "https://founderone-site.netlify.app",
-     "type": "netlify", "category": "startup", "source_dir": ""},
-    {"id": "news-dashboard", "name": "News Dashboard", "url": "https://yj-news-dashboard.netlify.app",
-     "type": "netlify", "category": "news", "source_dir": ""},
-    {"id": "ai-secretary", "name": "AI Secretary", "url": "https://yj-ai-secretary.netlify.app",
-     "type": "netlify", "category": "ai", "source_dir": ""},
+    # ── GitHub Pages (배포 완료) ──
+    {"id": "alpha-engine", "name": "Alpha Engine v5.7", "url": "https://jyjzzjtube-pixel.github.io/alpha-engine-v3/",
+     "type": "github", "category": "finance"},
+    {"id": "yjtax-v8", "name": "YJ Tax Master v9.2", "url": "https://jyjzzjtube-pixel.github.io/yjtax-v8/",
+     "type": "github", "category": "tax"},
+    {"id": "founderone", "name": "Founder One", "url": "https://jyjzzjtube-pixel.github.io/founderone-site/",
+     "type": "github", "category": "startup"},
+    {"id": "wonwill-app", "name": "제안서 시뮬레이터", "url": "https://jyjzzjtube-pixel.github.io/wonwill-app/",
+     "type": "github", "category": "proposal"},
+    {"id": "lotto", "name": "YJ 행운의 번호", "url": "https://jyjzzjtube-pixel.github.io/lotto-generator/",
+     "type": "github", "category": "utility"},
+    {"id": "coupang-blog", "name": "YJ 추천템 블로그", "url": "https://jyjzzjtube-pixel.github.io/coupang-blog/",
+     "type": "github", "category": "affiliate"},
+    {"id": "coupang-autoblog", "name": "쿠팡 오토블로그 Pro", "url": "https://jyjzzjtube-pixel.github.io/coupang-autoblog/",
+     "type": "github", "category": "affiliate"},
+    {"id": "yj-db-automation", "name": "YJ DB 자동화", "url": "https://jyjzzjtube-pixel.github.io/yj-db-automation/",
+     "type": "github", "category": "automation"},
+    {"id": "naver-blog-master", "name": "네이버 블로그 마스터", "url": "https://jyjzzjtube-pixel.github.io/naver-blog-master/",
+     "type": "github", "category": "blog"},
+    {"id": "yj-partners-mcn", "name": "YJ Partners MCN", "url": "https://jyjzzjtube-pixel.github.io/yj-partners-mcn/",
+     "type": "github", "category": "mcn"},
+    # ── Google Apps Script ──
+    {"id": "yj-drive-manager", "name": "YJ Drive Manager", "url": "https://script.google.com/macros/s/AKfycbyG5607pBRS1tMZZXjmQQNcrLVBUVtr9SBPNzgm2llXI9XH2nzVm8Bg5OfepfDObfM0/exec",
+     "type": "external", "category": "drive"},
+    # ── 로컬 서비스 ──
     {"id": "shorts-factory", "name": "Shorts Factory", "url": "http://localhost:5000",
-     "type": "local", "category": "content", "health_url": "http://localhost:5000/api/health"},
+     "type": "local", "category": "content", "health_url": "http://localhost:5000/api/health", "enabled": False},
     {"id": "cost-api", "name": "Cost API", "url": "http://localhost:5050",
-     "type": "local", "category": "monitoring", "health_url": "http://localhost:5050/"},
+     "type": "local", "category": "monitoring", "health_url": "http://localhost:5050/", "enabled": False},
+    # ── 외부 사이트 (항상 모니터링) ──
     {"id": "naver-blog", "name": "Naver Blog", "url": "https://blog.naver.com/jyjzzj",
      "type": "external", "category": "blog"},
     {"id": "youtube", "name": "YouTube", "url": "https://www.youtube.com/@jjin_deal",
      "type": "external", "category": "social"},
     {"id": "instagram", "name": "Instagram", "url": "https://www.instagram.com/jjin_deal",
      "type": "external", "category": "social"},
+    {"id": "naver-blog-ezsbiz", "name": "Naver Blog (쿠팡)", "url": "https://blog.naver.com/ezsbizteam",
+     "type": "external", "category": "affiliate"},
 ]
 
 # ── 관리 봇/서비스 ──

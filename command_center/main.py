@@ -92,6 +92,9 @@ class MainWindow(QMainWindow):
         # ── 타이머 ──
         self._setup_timers()
 
+        # 이전 사이트 상태 (상태 변경 감지용)
+        self._prev_site_status: dict[str, SiteStatus] = {}
+
         # ── 초기 데이터 로드 ──
         QTimer.singleShot(500, self._initial_load)
 
@@ -221,14 +224,32 @@ class MainWindow(QMainWindow):
         # 사이트 탭 업데이트
         self.site_tab.update_sites(results)
 
-        # 다운 사이트 알림
+        # 상태 변경 시에만 알림 (UP→DOWN, DOWN→UP)
         for r in results:
+            prev = self._prev_site_status.get(r.site_id)
+            if prev is None:
+                # 최초 실행: DOWN이면 기록만 하고 팝업 안 띄움
+                self._prev_site_status[r.site_id] = r.status
+                continue
+
+            if prev == r.status:
+                continue  # 상태 변경 없음 — 스킵
+
+            self._prev_site_status[r.site_id] = r.status
+
             if r.status != SiteStatus.UP:
                 self.alert_engine.emit(
                     AlertType.SITE_DOWN,
                     f"{r.name} 다운",
                     f"상태: {r.status.value} | {r.error}",
                     Severity.ERROR, r.site_id,
+                )
+            else:
+                self.alert_engine.emit(
+                    AlertType.SITE_RECOVERED,
+                    f"{r.name} 복구됨",
+                    f"응답시간: {r.response_time}s",
+                    Severity.INFO, r.site_id,
                 )
 
         # 봇 상태도 업데이트
@@ -330,25 +351,32 @@ def _setup_logging():
 
 
 def _exception_hook(exc_type, exc_value, exc_tb):
-    """전역 예외 핸들러 — pythonw.exe에서도 에러 기록"""
+    """전역 예외 핸들러 — 로그 기록만 (팝업 없음)"""
     msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
     logging.error(f"Unhandled exception:\n{msg}")
-    # 에러 다이얼로그 표시 (앱이 살아있을 때)
-    try:
-        from PyQt6.QtWidgets import QMessageBox
-        QMessageBox.critical(
-            None, "YJ Command Center 오류",
-            f"예기치 못한 오류가 발생했습니다:\n\n{exc_value}\n\n"
-            f"로그 파일을 확인하세요.",
-        )
-    except Exception:
-        pass
+    # 팝업 없이 로그만 기록 — 반복 팝업 방지
     sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+
+def _check_single_instance() -> bool:
+    """중복 실행 방지 — 이미 실행 중이면 False 반환"""
+    import socket
+    try:
+        _check_single_instance._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _check_single_instance._sock.bind(("127.0.0.1", 47391))
+        _check_single_instance._sock.listen(1)
+        return True
+    except OSError:
+        return False
 
 
 def main():
     log_file = _setup_logging()
     sys.excepthook = _exception_hook
+
+    if not _check_single_instance():
+        print("YJ Command Center is already running.", file=sys.stderr)
+        sys.exit(0)
 
     try:
         app = QApplication(sys.argv)

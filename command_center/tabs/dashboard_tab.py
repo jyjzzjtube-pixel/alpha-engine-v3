@@ -86,9 +86,11 @@ class DashboardTab(QWidget):
         grid.setContentsMargins(12, 12, 12, 12)
         grid.setSpacing(6)
 
-        # 사이트 LED 배치
+        # 사이트 LED 배치 (활성 사이트만)
         all_items = []
         for site in MANAGED_SITES:
+            if not site.get("enabled", True):
+                continue
             led = StatusLED(site["name"])
             self._site_leds[site["id"]] = led
             all_items.append(led)
@@ -250,7 +252,7 @@ class DashboardTab(QWidget):
             led = self._bot_leds.get(bot_id)
             if led:
                 if running:
-                    uptime = st.uptime_seconds if hasattr(st, "uptime_seconds") else st.get("uptime_seconds", 0)
+                    uptime = st.uptime_seconds if hasattr(st, "uptime_seconds") else st.get("uptime", st.get("uptime_seconds", 0))
                     mins = int(uptime // 60)
                     detail = f"실행 중 ({mins}분)" if mins > 0 else "실행 중"
                     led.set_status(True, detail)

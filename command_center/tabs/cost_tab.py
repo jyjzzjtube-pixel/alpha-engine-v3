@@ -195,9 +195,9 @@ class CostTab(QWidget):
         root.addWidget(scroll)
 
     def _setup_timer(self):
-        self._timer = QTimer(self)
-        self._timer.setInterval(COST_REFRESH_INTERVAL_MS)
-        self._timer.timeout.connect(self.refresh)
+        # 타이머는 main.py에서 CostRefreshWorker로 통합 관리
+        # CostTab 자체 타이머는 사용하지 않음
+        pass
 
     # ──────────────────────────── Public API ────────────────────────────
 
