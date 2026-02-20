@@ -15,10 +15,10 @@ from datetime import datetime
 from typing import Optional
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
-    QLineEdit, QFileDialog, QComboBox, QGroupBox, QSplitter, QScrollArea,
-    QFrame, QGridLayout, QListWidget, QListWidgetItem, QSlider, QSpinBox,
-    QDoubleSpinBox, QMessageBox, QToolBar, QSizePolicy, QToolButton,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QTextEdit, QLineEdit, QFileDialog, QComboBox, QGroupBox, QSplitter,
+    QScrollArea, QFrame, QGridLayout, QListWidget, QListWidgetItem, QSlider,
+    QSpinBox, QDoubleSpinBox, QMessageBox, QToolBar, QSizePolicy, QToolButton,
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, pyqtSlot, QPoint, QRect, QSize, QTimer, QMimeData,
@@ -1163,68 +1163,136 @@ class EditorTab(QWidget):
     # ── 도구 모음 ──
 
     def _on_execute_commands(self):
-        """마커/영역의 AI 명령어를 실행한다."""
+        """마커/영역의 AI 명령어를 Gemini로 실행하고 결과를 미리보기에 표시한다."""
         markers = self.canvas.get_markers()
         regions = self.canvas.get_regions()
         commands = []
         for m in markers:
             if m.command.strip():
-                commands.append(f"[마커 {m.uid}] ({m.x},{m.y}): {m.command}")
+                commands.append(f"[마커 {m.uid}] 좌표({m.x},{m.y}): {m.command}")
         for r in regions:
             if r.command.strip():
-                commands.append(f"[영역 {r.uid}] ({r.x},{r.y} {r.w}x{r.h}): {r.command}")
+                commands.append(
+                    f"[영역 {r.uid}] 좌표({r.x},{r.y}) 크기({r.w}x{r.h}): {r.command}")
 
         if not commands:
             QMessageBox.information(self, "알림",
-                "실행할 명령어가 없습니다.\n마커/영역에 명령어를 입력하세요.")
+                "실행할 명령어가 없습니다.\n마커/영역에 AI 명령어를 입력하세요.")
             return
+
+        # 확인 다이얼로그 — 미리보기 먼저 보여주기
+        preview_text = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(commands))
+        reply = QMessageBox.question(
+            self, "AI 명령어 실행 확인",
+            f"{len(commands)}개 명령어를 AI에게 실행합니다:\n\n"
+            f"{preview_text}\n\n실행하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._ref_analysis.setPlainText("⏳ AI 처리 중... 잠시 기다려주세요.")
+        QApplication.processEvents()
 
         try:
             from affiliate_system.ai_generator import AIGenerator
             gen = AIGenerator()
-            prompt = (
-                "다음은 이미지 편집 명령 목록입니다. 각 명령을 분석하고 "
-                "실행 결과를 JSON 형태로 반환하세요:\n\n"
-                + "\n".join(commands)
-            )
-            result = gen.generate_content(prompt) if hasattr(gen, 'generate_content') else None
-            if result:
-                self._ref_analysis.setPlainText(f"[실행 결과]\n{result}")
-                QMessageBox.information(self, "실행 완료",
-                    f"{len(commands)}개 명령어 실행 완료!")
-                return
-        except Exception:
-            pass
 
-        summary = f"[실행 대기 - {len(commands)}개 명령어]\n\n" + "\n".join(commands)
-        self._ref_analysis.setPlainText(summary)
-        QMessageBox.information(self, "명령어 확인",
-            f"{len(commands)}개 명령어가 준비되었습니다.\n"
-            "AI 모듈 연동 후 자동 실행됩니다.")
+            # 이미지가 있으면 이미지 컨텍스트와 함께 분석
+            image_context = ""
+            if self._current_image_path:
+                image_context = f"\n[이미지 파일]: {Path(self._current_image_path).name}"
+
+            prompt = (
+                "당신은 이미지 편집 AI 어시스턴트입니다. "
+                "사용자가 이미지 위에 마커/영역을 설정하고 각각에 편집 명령어를 지정했습니다.\n"
+                "각 명령어를 분석하고 구체적인 편집 지시사항을 한국어로 반환하세요.\n"
+                "각 항목에 대해 다음을 포함해주세요:\n"
+                "1. 명령어 해석\n"
+                "2. 구체적 편집 방법 (도구, 파라미터)\n"
+                "3. 예상 결과 설명\n"
+                "4. 추천 설정값 (있으면)\n\n"
+                f"{image_context}\n\n"
+                "[편집 명령어 목록]\n" + "\n".join(commands)
+            )
+            result = gen.generate_content(prompt, max_tokens=4096, temperature=0.5)
+
+            if result:
+                self._ref_analysis.setPlainText(
+                    f"✅ AI 실행 결과 ({len(commands)}개 명령어)\n"
+                    f"{'='*50}\n\n{result}")
+                QMessageBox.information(self, "실행 완료",
+                    f"✅ {len(commands)}개 명령어 AI 처리 완료!\n"
+                    "하단 분석 결과 패널에서 결과를 확인하세요.")
+            else:
+                self._ref_analysis.setPlainText(
+                    "⚠️ AI 응답이 비어있습니다. API 키를 확인하세요.")
+
+        except Exception as e:
+            error_msg = str(e)
+            self._ref_analysis.setPlainText(
+                f"❌ AI 실행 오류\n{'='*50}\n\n{error_msg}\n\n"
+                "[명령어 목록 (대기 중)]\n" + "\n".join(commands))
+            QMessageBox.warning(self, "실행 오류",
+                f"AI 처리 중 오류가 발생했습니다:\n{error_msg[:200]}\n\n"
+                "설정 탭에서 API 키를 확인해주세요.")
 
     def _on_preview_commands(self):
-        """마커/영역 명령어를 미리보기로 표시한다."""
+        """마커/영역 명령어를 미리보기로 표시 + 캔버스에 명령어 라벨 오버레이."""
         markers = self.canvas.get_markers()
         regions = self.canvas.get_regions()
-        lines = ["=== 명령어 미리보기 ===\n"]
-        for m in markers:
-            status = "V" if m.command.strip() else "X"
-            lines.append(f"[{status}] 마커 {m.uid} ({m.x},{m.y})")
-            if m.command.strip():
-                lines.append(f"   -> {m.command}")
-            lines.append("")
-        for r in regions:
-            status = "V" if r.command.strip() else "X"
-            lines.append(f"[{status}] 영역 {r.uid} ({r.x},{r.y} {r.w}x{r.h})")
-            if r.command.strip():
-                lines.append(f"   -> {r.command}")
-            lines.append("")
 
         total = len(markers) + len(regions)
         with_cmd = sum(1 for m in markers if m.command.strip()) + \
                    sum(1 for r in regions if r.command.strip())
-        lines.append(f"\n총 {total}개 항목 | 명령어 입력: {with_cmd}개")
+        without_cmd = total - with_cmd
+
+        lines = []
+        lines.append("┌─────────────────────────────────────┐")
+        lines.append("│       📋 명령어 미리보기 대시보드       │")
+        lines.append("└─────────────────────────────────────┘")
+        lines.append("")
+        lines.append(f"  📊 전체: {total}개  |  ✅ 입력됨: {with_cmd}개  |  ⬜ 미입력: {without_cmd}개")
+        lines.append("")
+
+        if markers:
+            lines.append("── 🔴 마커 ──")
+            for m in markers:
+                status = "✅" if m.command.strip() else "⬜"
+                lines.append(f"  {status} 마커 {m.uid}  ({m.x}, {m.y})")
+                if m.command.strip():
+                    cmd_preview = m.command[:80] + ("..." if len(m.command) > 80 else "")
+                    lines.append(f"      → {cmd_preview}")
+                else:
+                    lines.append("      → (명령어 미입력)")
+                lines.append("")
+
+        if regions:
+            lines.append("── 🟦 영역 ──")
+            for r in regions:
+                status = "✅" if r.command.strip() else "⬜"
+                lines.append(f"  {status} 영역 {r.uid}  ({r.x},{r.y}) {r.w}×{r.h}px")
+                if r.command.strip():
+                    cmd_preview = r.command[:80] + ("..." if len(r.command) > 80 else "")
+                    lines.append(f"      → {cmd_preview}")
+                else:
+                    lines.append("      → (명령어 미입력)")
+                lines.append("")
+
+        if total == 0:
+            lines.append("  ⚠️ 마커 또는 영역이 없습니다.")
+            lines.append("  캔버스에서 마커/영역 모드로 클릭하여 추가하세요.")
+        elif with_cmd == 0:
+            lines.append("  ⚠️ 명령어가 입력된 항목이 없습니다.")
+            lines.append("  오른쪽 패널에서 각 마커/영역에 AI 명령어를 입력하세요.")
+        else:
+            lines.append("  ✅ '실행하기' 버튼을 눌러 AI에게 명령어를 전송하세요.")
+            lines.append(f"  사용 AI: Gemini 2.5 Flash (우선) + Claude 3 Haiku (폴백)")
+
         self._ref_analysis.setPlainText("\n".join(lines))
+
+        # 캔버스 갱신 (마커/영역 하이라이트 강조)
+        self.canvas.update()
 
     def _on_open_image(self):
         path, _ = QFileDialog.getOpenFileName(

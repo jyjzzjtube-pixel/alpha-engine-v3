@@ -221,6 +221,7 @@ def build_bot():
             "/screenshot - Capture current screen\n"
             "/download <url> - Download a file\n"
             "/exec <cmd> - Execute shell command\n"
+            "/cost [detail] - API cost report (KRW/USD)\n"
             "/status - System status check\n"
             "/help - Show this message"
         )
@@ -365,6 +366,60 @@ def build_bot():
         await file.download_to_drive(str(filepath))
         await update.message.reply_text(f"Saved to: {filepath}")
 
+    # ── /cost ──
+    @auth_required
+    async def cmd_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        period = context.args[0] if context.args else "summary"
+        try:
+            sys.path.insert(0, str(BASE_DIR.parent))
+            from api_cost_tracker import CostTracker, BUDGET_LIMIT_KRW
+            tracker = CostTracker(
+                db_path=str(BASE_DIR.parent / "api_usage.db"),
+                project_name="telegram_bot"
+            )
+            rate = tracker.get_exchange_rate()
+            today_usd = tracker.get_today_total()
+            monthly_usd = tracker.get_monthly_total()
+            alltime_usd = tracker.get_all_time_total()
+
+            today_krw = today_usd * rate
+            monthly_krw = monthly_usd * rate
+            alltime_krw = alltime_usd * rate
+            budget_pct = (monthly_krw / BUDGET_LIMIT_KRW * 100) if BUDGET_LIMIT_KRW > 0 else 0
+
+            # 예산 상태 이모지
+            if budget_pct >= 100:
+                budget_emoji = "\U0001F6A8"  # 🚨
+            elif budget_pct >= 80:
+                budget_emoji = "\u26A0\uFE0F"  # ⚠️
+            else:
+                budget_emoji = "\u2705"  # ✅
+
+            lines = [
+                "API \uBE44\uC6A9 \uB9AC\uD3EC\uD2B8",  # API 비용 리포트
+                "",
+                f"\uC624\uB298: \u20A9{today_krw:,.0f} (${today_usd:.4f})",  # 오늘
+                f"\uC774\uBC88\uB2EC: \u20A9{monthly_krw:,.0f} (${monthly_usd:.4f})",  # 이번달
+                f"\uC804\uCCB4 \uB204\uC801: \u20A9{alltime_krw:,.0f} (${alltime_usd:.4f})",  # 전체 누적
+                "",
+                f"{budget_emoji} \uC608\uC0B0: {budget_pct:.1f}% (\u20A9{BUDGET_LIMIT_KRW:,} \uD55C\uB3C4)",  # 예산
+                f"\uD658\uC728: 1 USD = \u20A9{rate:,.2f}",  # 환율
+            ]
+
+            # 모델별 상세 (summary 모드)
+            if period == "detail":
+                models = tracker.get_model_breakdown()
+                if models:
+                    lines.append("")
+                    lines.append("[\uBAA8\uB378\uBCC4 \uBE44\uC6A9]")  # [모델별 비용]
+                    for model, in_tok, out_tok, cost in models[:8]:
+                        name = model[:20] + ".." if len(model) > 20 else model
+                        lines.append(f"  {name}: \u20A9{cost*rate:,.0f}")
+
+            await update.message.reply_text("\n".join(lines))
+        except Exception as e:
+            await update.message.reply_text(f"Cost report error: {str(e)}")
+
     # ── Build application ──
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -377,6 +432,7 @@ def build_bot():
     app.add_handler(CommandHandler("download", cmd_download))
     app.add_handler(CommandHandler("exec", cmd_exec))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("cost", cmd_cost))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

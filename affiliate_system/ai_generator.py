@@ -863,6 +863,70 @@ English translation:"""
             temperature=0.3,
         )
 
+    def generate_content(self, prompt: str, max_tokens: int = 4096,
+                         temperature: float = 0.7) -> str:
+        """범용 AI 콘텐츠 생성 (이미지 편집 명령어 실행 등).
+
+        Gemini를 우선 사용하고, 실패 시 Claude로 폴백한다.
+
+        Args:
+            prompt: 프롬프트 텍스트
+            max_tokens: 최대 출력 토큰
+            temperature: 창의성 파라미터
+
+        Returns:
+            AI 응답 텍스트
+        """
+        return self._call_with_fallback(
+            primary_fn=self._call_gemini,
+            fallback_fn=lambda prompt, **kw: self._call_claude(
+                model=CLAUDE_HAIKU, prompt=prompt, **kw),
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+    def analyze_image(self, image_path: str, question: str = "") -> str:
+        """이미지를 분석하여 설명을 반환한다 (Gemini Vision).
+
+        Args:
+            image_path: 분석할 이미지 파일 경로
+            question: 추가 질문 (선택)
+
+        Returns:
+            이미지 분석 결과 텍스트
+        """
+        try:
+            from PIL import Image
+            from google.genai import types
+
+            img = Image.open(image_path)
+            prompt_text = question or (
+                "이 이미지를 분석하고 한국어로 상세히 설명해주세요. "
+                "구도, 색감, 주요 요소, 분위기를 포함해주세요."
+            )
+
+            response = self.gemini_client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[prompt_text, img],
+            )
+
+            usage = getattr(response, "usage_metadata", None)
+            in_tok = getattr(usage, "prompt_token_count", 0) or 0 if usage else 0
+            out_tok = getattr(usage, "candidates_token_count", 0) or 0 if usage else 0
+            cost = self.tracker.record("gemini-2.0-flash-vision", in_tok, out_tok)
+            self._total_cost_usd += cost
+
+            result = response.text
+            logger.info(f"이미지 분석 완료: {image_path}, cost=${cost:.6f}")
+            return result
+
+        except ImportError:
+            return "[오류] Pillow 라이브러리가 필요합니다. pip install Pillow"
+        except Exception as e:
+            logger.error(f"이미지 분석 실패: {e}")
+            return f"[분석 실패] {str(e)}"
+
     def analyze_product(self, product: Product) -> str:
         """상품 데이터를 분석하여 마케팅 인사이트를 생성한다 (Gemini Flash).
 
