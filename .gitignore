@@ -1,0 +1,107 @@
+# Environment & Secrets
+.env
+credentials.json
+token.json
+*.pickle
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
+
+# Temporary screenshots & images
+*.png
+*.jpeg
+*.jpg
+!affiliate_system/workspace/jjin_deal_profile.png
+
+# Temporary Python scripts (root level only)
+/analyze_*.py
+/apply_*.py
+/auto_billing.py
+/change_layout*.py
+/check_*.py
+/clean*.py
+/cleanup*.py
+/compare*.py
+/cdp_*.py
+/debug_*.py
+/deep_fix.py
+/deploy_*.py
+/disable_*.py
+/do_setup*.py
+/edit_widgets.py
+/enable_title*.py
+/final_*.py
+/find_*.py
+/fix_*.py
+/force_*.py
+/gemini_bridge.py
+/hide_*.py
+/homepage_*.py
+/layout_cleanup.py
+/list_sites.py
+/modify_widgets.py
+/move_widgets*.py
+/naeil_*.py
+/naver_blog_*.py
+/new_admin_settings.py
+/optimize_layout.py
+/premium_widgets*.py
+/rearrange_sidebar.py
+/rebuild_all_widgets.py
+/register_*.py
+/remove_*.py
+/reregister*.py
+/setup_*.py
+/sidebar_widgets.py
+/sortable_analysis.py
+/swap_*.py
+/trace_*.py
+/try_*.py
+/update_widgets.py
+/upgrade_widgets.py
+/upload_images.py
+/widget_register.py
+/activate_*.py
+
+# Temp files
+nul
+*.html
+!index.html
+!bridgeone_dashboard.html
+*.gs
+*.json
+!package.json
+*.txt
+*.bat
+*.ps1
+
+# Other project folders (separate repos)
+coupang-autoblog/
+coupang-blog/
+kakao_local/
+lotto/
+wonwill_app/
+yjtax_v8_extracted/
+auto-program/
+shorts_factory/
+bookmarks_*.html
+
+# Workspace temp files
+affiliate_system/workspace/*.txt
+affiliate_system/workspace/b64_chunk_*.txt
+
+# Database files
+*.db
+exchange_rate_cache.json
