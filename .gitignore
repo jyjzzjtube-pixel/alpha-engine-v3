@@ -6,6 +6,8 @@ token.json
 
 # Python
 __pycache__/
+venv/
+*/venv/
 *.pyc
 *.pyo
 *.egg-info/
@@ -85,6 +87,7 @@ nul
 !package.json
 *.txt
 *.bat
+!AI_Command_Center/START_BOT.bat
 *.ps1
 
 # Other project folders (separate repos)
@@ -97,6 +100,14 @@ yjtax_v8_extracted/
 auto-program/
 shorts_factory/
 bookmarks_*.html
+
+# Log files
+logs/
+*/logs/
+**/logs/
+
+# Downloads
+*/downloads/
 
 # Workspace temp files
 affiliate_system/workspace/*.txt
