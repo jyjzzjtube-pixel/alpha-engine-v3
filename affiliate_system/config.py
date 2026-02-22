@@ -21,6 +21,10 @@ DRIVE_CLIENT_SECRET = os.getenv('DRIVE_CLIENT_SECRET', '')
 INSTAGRAM_USERNAME  = os.getenv('INSTAGRAM_USERNAME', '')
 INSTAGRAM_PASSWORD  = os.getenv('INSTAGRAM_PASSWORD', '')
 
+# ── Telegram ──
+TELEGRAM_BOT_TOKEN  = os.getenv('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID    = os.getenv('TELEGRAM_CHAT_ID', '')
+
 # ── Coupang Partners API ──
 COUPANG_ACCESS_KEY  = os.getenv('COUPANG_ACCESS_KEY', '')
 COUPANG_SECRET_KEY  = os.getenv('COUPANG_SECRET_KEY', '')

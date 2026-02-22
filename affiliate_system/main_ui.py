@@ -33,8 +33,10 @@ from api_cost_tracker import CostTracker
 from affiliate_system.config import (
     BUDGET_LIMIT_KRW, COST_TRACKER_DB, GEMINI_API_KEY,
     ANTHROPIC_API_KEY, INSTAGRAM_USERNAME,
-    RENDER_OUTPUT_DIR, PROJECT_DIR,
+    RENDER_OUTPUT_DIR, PROJECT_DIR, WORK_DIR,
     PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_ACCESS_KEY,
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, CDP_URL,
+    COUPANG_ACCESS_KEY, COUPANG_SECRET_KEY,
 )
 from affiliate_system.models import (
     Campaign, CampaignStatus, Platform, Product, AIContent, RenderConfig,
@@ -565,12 +567,23 @@ class DashboardTab(QWidget):
         self.led_drive = StatusLED("구글 드라이브", _drive_token.exists())
         self.led_gemini = StatusLED("Gemini API", bool(GEMINI_API_KEY))
         self.led_claude = StatusLED("Claude API", bool(ANTHROPIC_API_KEY))
+        self.led_telegram = StatusLED("텔레그램 봇", bool(TELEGRAM_BOT_TOKEN))
+        self.led_chrome = StatusLED("Chrome CDP", False)
+        self.led_pexels = StatusLED("Pexels (무료)", bool(PEXELS_API_KEY))
+        self.led_coupang = StatusLED("쿠팡 파트너스", bool(COUPANG_ACCESS_KEY))
 
         status_layout.addWidget(self.led_db)
         status_layout.addWidget(self.led_drive)
         status_layout.addWidget(self.led_gemini)
         status_layout.addWidget(self.led_claude)
+        status_layout.addWidget(self.led_telegram)
+        status_layout.addWidget(self.led_chrome)
+        status_layout.addWidget(self.led_pexels)
+        status_layout.addWidget(self.led_coupang)
         status_layout.addStretch()
+
+        # Chrome CDP 상태 체크 (비동기)
+        self._check_chrome_cdp()
 
         mid.addWidget(status_frame)
 
@@ -682,11 +695,24 @@ class DashboardTab(QWidget):
             # LED 상태 업데이트
             self.led_gemini.set_status(bool(GEMINI_API_KEY))
             self.led_claude.set_status(bool(ANTHROPIC_API_KEY))
+            self.led_telegram.set_status(bool(TELEGRAM_BOT_TOKEN))
+            self.led_pexels.set_status(bool(PEXELS_API_KEY))
+            self.led_coupang.set_status(bool(COUPANG_ACCESS_KEY))
+            self._check_chrome_cdp()
 
             # DB 뷰어 갱신
             self._load_db_records()
         except Exception:
             pass
+
+    def _check_chrome_cdp(self):
+        """Chrome CDP 연결 상태 확인"""
+        try:
+            import requests
+            resp = requests.get(f"{CDP_URL}/json/version", timeout=2)
+            self.led_chrome.set_status(resp.status_code == 200)
+        except Exception:
+            self.led_chrome.set_status(False)
 
     def _load_db_records(self):
         """api_usage.db에서 최근 기록 로드 + 비용 상세 분석"""
@@ -845,82 +871,197 @@ class DashboardTab(QWidget):
 # ══════════════════════════════════════════════════════════════
 
 class ModeAWidget(QWidget):
-    """Mode A: 외부 상품 판매 (제휴 마케팅)"""
+    """Mode A: 외부 상품 판매 (제휴 마케팅) — 플랫폼 선택 + 미리보기 + 프리셋"""
 
     campaign_created = pyqtSignal(object)
 
+    # 판매 최적화 페르소나 프리셋
+    PERSONA_PRESETS = [
+        ("직접 입력", ""),
+        ("🔥 20대 여성 뷰티 유튜버", "20대 여성 뷰티 유튜버, 친근한 말투, 이모티콘 자주 사용, '언니' 호칭"),
+        ("💪 30대 남성 테크 리뷰어", "30대 남성 IT/테크 리뷰어, 전문적이면서 쉬운 설명, 데이터 기반 비교"),
+        ("🛍️ 쿠팡 쇼핑 전문가", "쿠팡 최저가 전문가, 할인율/로켓배송 강조, '이 가격 실화?' 식 표현"),
+        ("🍳 맛집/음식 인플루언서", "맛집 탐방 인플루언서, 감탄사 많이, 먹방 느낌, 생생한 맛 표현"),
+        ("👔 비즈니스 컨설턴트", "전문적 B2B 컨설턴트, 데이터와 사례 중심, 신뢰감 있는 어조"),
+        ("🎮 MZ세대 트렌드세터", "MZ세대 트렌드세터, 밈/신조어 활용, 짧고 임팩트 있는 표현"),
+        ("👩‍👧 육아맘 추천러", "30대 육아맘, 가성비+실용성 강조, 아이와 함께 쓸 수 있는지 중심"),
+    ]
+
+    # 판매 최적화 훅 프리셋
+    HOOK_PRESETS = [
+        ("직접 입력", ""),
+        ("⚡ 충격 질문형", "충격적인 질문으로 시작, '이거 아직도 모르세요?' 3초 안에 클릭 유도"),
+        ("💰 가격 충격형", "파격 할인가로 시작, '이 가격 실화?!' 즉각적 구매 욕구 자극"),
+        ("📊 비교형", "경쟁 제품 대비 장점 비교, '○○보다 ○○이 더 좋은 이유 3가지'"),
+        ("🔥 긴급/한정형", "한정 수량/시간 강조, FOMO(놓칠까봐 두려움) 자극, 카운트다운 느낌"),
+        ("📖 스토리텔링형", "개인 경험담으로 시작, '나도 처음엔 몰랐는데...' 공감 유도"),
+        ("🏆 베스트셀러형", "판매량/리뷰 수 강조, '100만개 팔린 이유' 사회적 증거 활용"),
+        ("🎯 문제해결형", "타겟의 페인포인트 공략, '○○ 때문에 고민이라면 이것!' 해결책 제시"),
+    ]
+
+    # 소스 플랫폼 (클릭 선택)
+    SOURCE_PLATFORMS = [
+        ("쿠팡", "🛒", "#e44d26"),
+        ("네이버", "🟢", "#03c75a"),
+        ("알리", "🌏", "#ff6a00"),
+        ("11번가", "🔴", "#ff0038"),
+        ("티몬", "🟡", "#ff5a5f"),
+        ("위메프", "🟠", "#ff4081"),
+    ]
+
     def __init__(self):
         super().__init__()
+        self._scraped_product = None
         self._init_ui()
 
     def _init_ui(self):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(20)
+        layout.setSpacing(16)
 
         # 좌측: 입력 폼
         left = QVBoxLayout()
-        left.setSpacing(12)
+        left.setSpacing(10)
 
-        # URL 입력
+        # ── 소스 플랫폼 선택 + URL 입력 ──
         url_group = QGroupBox("상품 URL 입력")
         url_layout = QVBoxLayout(url_group)
+        url_layout.setSpacing(8)
+
+        # 플랫폼 선택 버튼 행
+        plat_src_row = QHBoxLayout()
+        plat_src_row.setSpacing(6)
+        lbl_src = QLabel("소스:")
+        lbl_src.setStyleSheet(
+            "font-size: 11px; font-weight: 700; color: #6b7280;")
+        lbl_src.setFixedWidth(35)
+        plat_src_row.addWidget(lbl_src)
+
+        self._src_buttons = []
+        for name, icon, color in self.SOURCE_PLATFORMS:
+            btn = QPushButton(f"{icon} {name}")
+            btn.setCheckable(True)
+            btn.setFixedHeight(32)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: #111827; color: #9ca3af;
+                    border: 1px solid #1f2937; border-radius: 6px;
+                    padding: 4px 10px; font-size: 12px; font-weight: 600;
+                }}
+                QPushButton:checked {{
+                    background: {color}; color: white;
+                    border-color: {color};
+                }}
+                QPushButton:hover:!checked {{
+                    background: #1f2937; color: #e5e7eb;
+                }}
+            """)
+            btn.clicked.connect(
+                lambda checked, n=name: self._on_src_platform_click(n))
+            plat_src_row.addWidget(btn)
+            self._src_buttons.append((name, btn))
+        plat_src_row.addStretch()
+        url_layout.addLayout(plat_src_row)
+
+        # URL 입력 행 (줄인 높이)
         url_row = QHBoxLayout()
+        url_row.setSpacing(8)
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText(
-            "쿠팡 / 네이버 스마트스토어 / 알리익스프레스 / TikTok Shop URL...")
-        self.url_input.setFixedHeight(44)
+            "상품 URL을 붙여넣기 하세요 (모든 쇼핑몰 주소 지원)")
+        self.url_input.setFixedHeight(36)
+        self.url_input.returnPressed.connect(self._on_scrape)
         self.btn_scrape = QPushButton("수집")
         self.btn_scrape.setObjectName("ghostBtn")
-        self.btn_scrape.setFixedSize(80, 44)
+        self.btn_scrape.setFixedSize(70, 36)
         self.btn_scrape.clicked.connect(self._on_scrape)
         url_row.addWidget(self.url_input)
         url_row.addWidget(self.btn_scrape)
         url_layout.addLayout(url_row)
         left.addWidget(url_group)
 
-        # 페르소나 / 훅 지시
-        ai_group = QGroupBox("AI 지시사항")
+        # ── 페르소나 / 훅 지시 (프리셋 포함) ──
+        ai_group = QGroupBox("페르소나 & 훅 (판매 최적화)")
         ai_layout = QVBoxLayout(ai_group)
+        ai_layout.setSpacing(6)
 
-        lbl_p = QLabel("페르소나 설정")
+        # 페르소나 프리셋
+        p_row = QHBoxLayout()
+        lbl_p = QLabel("페르소나")
         lbl_p.setStyleSheet(
-            "font-size: 11px; font-weight: 600; color: #6b7280;")
-        ai_layout.addWidget(lbl_p)
+            "font-size: 11px; font-weight: 700; color: #6b7280;")
+        lbl_p.setFixedWidth(55)
+        p_row.addWidget(lbl_p)
+        self.persona_combo = QComboBox()
+        self.persona_combo.setFixedHeight(32)
+        for label, _ in self.PERSONA_PRESETS:
+            self.persona_combo.addItem(label)
+        self.persona_combo.currentIndexChanged.connect(
+            self._on_persona_preset)
+        p_row.addWidget(self.persona_combo)
+        ai_layout.addLayout(p_row)
+
         self.persona_input = QTextEdit()
         self.persona_input.setPlaceholderText(
-            "예: '20대 여성 뷰티 유튜버, 친근한 말투'")
-        self.persona_input.setFixedHeight(50)
+            "판매 페르소나를 선택하거나 직접 입력하세요...")
+        self.persona_input.setFixedHeight(44)
         ai_layout.addWidget(self.persona_input)
 
-        lbl_h = QLabel("훅(Hook) 지시")
+        # 훅 프리셋
+        h_row = QHBoxLayout()
+        lbl_h = QLabel("훅 전략")
         lbl_h.setStyleSheet(
-            "font-size: 11px; font-weight: 600; color: #6b7280;")
-        ai_layout.addWidget(lbl_h)
+            "font-size: 11px; font-weight: 700; color: #6b7280;")
+        lbl_h.setFixedWidth(55)
+        h_row.addWidget(lbl_h)
+        self.hook_combo = QComboBox()
+        self.hook_combo.setFixedHeight(32)
+        for label, _ in self.HOOK_PRESETS:
+            self.hook_combo.addItem(label)
+        self.hook_combo.currentIndexChanged.connect(
+            self._on_hook_preset)
+        h_row.addWidget(self.hook_combo)
+        ai_layout.addLayout(h_row)
+
         self.hook_input = QTextEdit()
         self.hook_input.setPlaceholderText(
-            "예: '충격적인 질문으로 시작, 3초 안에 클릭 유도'")
-        self.hook_input.setFixedHeight(50)
+            "판매 훅 전략을 선택하거나 직접 입력하세요...")
+        self.hook_input.setFixedHeight(44)
         ai_layout.addWidget(self.hook_input)
 
         left.addWidget(ai_group)
 
-        # 플랫폼 선택
-        plat_group = QGroupBox("업로드 플랫폼")
+        # ── 업로드 플랫폼 (3개 동시) ──
+        plat_group = QGroupBox("업로드 플랫폼 (동시 게시)")
         plat_layout = QHBoxLayout(plat_group)
+        plat_layout.setSpacing(12)
         self.chk_yt = QCheckBox("YouTube Shorts")
         self.chk_yt.setChecked(True)
         self.chk_naver = QCheckBox("네이버 블로그")
+        self.chk_naver.setChecked(True)
         self.chk_ig = QCheckBox("Instagram Reels")
+        self.chk_ig.setChecked(True)
+        # 전체 선택/해제
+        self.chk_all = QCheckBox("전체")
+        self.chk_all.setChecked(True)
+        self.chk_all.stateChanged.connect(self._on_check_all)
+        plat_layout.addWidget(self.chk_all)
         plat_layout.addWidget(self.chk_yt)
         plat_layout.addWidget(self.chk_naver)
         plat_layout.addWidget(self.chk_ig)
         plat_layout.addStretch()
+
+        # 자동 썸네일 옵션
+        self.chk_auto_thumb = QCheckBox("자동 썸네일 생성")
+        self.chk_auto_thumb.setChecked(True)
+        self.chk_auto_thumb.setStyleSheet(
+            "color: #a855f7; font-weight: 700;")
+        plat_layout.addWidget(self.chk_auto_thumb)
         left.addWidget(plat_group)
 
-        # 생성 버튼
+        # ── 캠페인 생성 버튼 ──
         self.btn_generate = QPushButton("캠페인 생성 시작")
-        self.btn_generate.setFixedHeight(52)
+        self.btn_generate.setFixedHeight(48)
         self.btn_generate.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -939,23 +1080,23 @@ class ModeAWidget(QWidget):
 
         layout.addLayout(left, stretch=3)
 
-        # 우측: 상품 미리보기
+        # ── 우측: 상품 미리보기 (수정됨 - 작동하게) ──
         right = QFrame()
-        right.setMinimumWidth(250)
+        right.setMinimumWidth(280)
         right.setStyleSheet("""
             QFrame { background: #0a0e1a; border: 1px solid #1f2937;
                      border-radius: 14px; }
         """)
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(16, 16, 16, 16)
-        right_layout.setSpacing(12)
+        right_layout.setContentsMargins(16, 14, 16, 14)
+        right_layout.setSpacing(10)
 
         lbl_preview = QLabel("상품 미리보기")
         lbl_preview.setObjectName("metricLabel")
         right_layout.addWidget(lbl_preview)
 
         self.img_label = QLabel("상품 이미지\n미리보기")
-        self.img_label.setFixedSize(220, 220)
+        self.img_label.setFixedSize(250, 250)
         self.img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.img_label.setStyleSheet("""
             background: #111827; border: 2px dashed #1f2937;
@@ -967,102 +1108,277 @@ class ModeAWidget(QWidget):
         self.lbl_title = QLabel("")
         self.lbl_title.setWordWrap(True)
         self.lbl_title.setStyleSheet(
-            "font-size: 14px; font-weight: 700; color: #f9fafb;")
+            "font-size: 13px; font-weight: 700; color: #f9fafb;")
+        self.lbl_title.setMaximumHeight(60)
         right_layout.addWidget(self.lbl_title)
 
         self.lbl_price = QLabel("")
         self.lbl_price.setStyleSheet(
-            "font-size: 20px; font-weight: 900; color: #6366f1;")
+            "font-size: 22px; font-weight: 900; color: #6366f1;")
         right_layout.addWidget(self.lbl_price)
-        right_layout.addStretch()
 
+        self.lbl_platform_tag = QLabel("")
+        self.lbl_platform_tag.setStyleSheet(
+            "color: #9ca3af; font-size: 11px;")
+        right_layout.addWidget(self.lbl_platform_tag)
+
+        # 썸네일 미리보기 (자동 생성용)
+        self.lbl_thumb_title = QLabel("썸네일 미리보기")
+        self.lbl_thumb_title.setObjectName("metricLabel")
+        self.lbl_thumb_title.setVisible(False)
+        right_layout.addWidget(self.lbl_thumb_title)
+
+        self.thumb_label = QLabel("자동 썸네일로\n가야하지 않나?\n쇼츠,릴스,블로그\n셋다 가능하게")
+        self.thumb_label.setFixedSize(250, 140)
+        self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.thumb_label.setStyleSheet("""
+            background: #111827; border: 2px dashed #374151;
+            border-radius: 10px; color: #4b5563; font-size: 12px;
+        """)
+        self.thumb_label.setVisible(False)
+        right_layout.addWidget(
+            self.thumb_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        right_layout.addStretch()
         layout.addWidget(right, stretch=1)
+
+    # ── 소스 플랫폼 클릭 ──
+
+    def _on_src_platform_click(self, name: str):
+        """소스 플랫폼 버튼 클릭 시 단일 선택 + URL 가이드"""
+        for n, btn in self._src_buttons:
+            btn.setChecked(n == name)
+        # URL 자동 인식을 위한 플레이스홀더 업데이트
+        hints = {
+            "쿠팡": "https://www.coupang.com/... 상품 URL",
+            "네이버": "https://smartstore.naver.com/... 상품 URL",
+            "알리": "https://ko.aliexpress.com/... 상품 URL",
+            "11번가": "https://www.11st.co.kr/... 상품 URL",
+            "티몬": "https://www.tmon.co.kr/... 상품 URL",
+            "위메프": "https://front.wemakeprice.com/... 상품 URL",
+        }
+        self.url_input.setPlaceholderText(hints.get(name, "상품 URL"))
+
+    # ── 프리셋 선택 ──
+
+    def _on_persona_preset(self, index: int):
+        if index > 0:
+            _, text = self.PERSONA_PRESETS[index]
+            self.persona_input.setPlainText(text)
+
+    def _on_hook_preset(self, index: int):
+        if index > 0:
+            _, text = self.HOOK_PRESETS[index]
+            self.hook_input.setPlainText(text)
+
+    # ── 전체 선택 ──
+
+    def _on_check_all(self, state):
+        checked = state == 2
+        self.chk_yt.setChecked(checked)
+        self.chk_naver.setChecked(checked)
+        self.chk_ig.setChecked(checked)
+
+    # ── 상품 수집 (개선된 스크래핑) ──
 
     @pyqtSlot()
     def _on_scrape(self):
-        """상품 URL에서 정보를 수집한다."""
+        """상품 URL에서 정보를 수집한다 (멀티 플랫폼 지원)."""
         url = self.url_input.text().strip()
         if not url:
             QMessageBox.information(
                 self, "입력 필요", "상품 URL을 입력해주세요.")
             return
 
+        # URL에서 소스 플랫폼 자동 감지
+        platform_detected = ""
+        if "coupang.com" in url:
+            platform_detected = "쿠팡"
+        elif "naver.com" in url or "smartstore" in url:
+            platform_detected = "네이버"
+        elif "aliexpress" in url:
+            platform_detected = "알리"
+        elif "11st.co.kr" in url:
+            platform_detected = "11번가"
+        elif "tmon.co.kr" in url:
+            platform_detected = "티몬"
+        elif "wemakeprice" in url:
+            platform_detected = "위메프"
+
+        if platform_detected:
+            for n, btn in self._src_buttons:
+                btn.setChecked(n == platform_detected)
+            self.lbl_platform_tag.setText(f"🏷️ {platform_detected}")
+
         self.btn_scrape.setEnabled(False)
-        self.btn_scrape.setText("수집중...")
+        self.btn_scrape.setText("...")
 
         try:
-            import requests
-            from bs4 import BeautifulSoup
-
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                              'AppleWebKit/537.36 (KHTML, like Gecko) '
-                              'Chrome/120.0.0.0 Safari/537.36'
-            }
-            resp = requests.get(url, headers=headers, timeout=15)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, 'html.parser')
-
-            # 제목 추출
             title = ""
-            for sel in ['meta[property="og:title"]', 'title', 'h1']:
-                el = soup.select_one(sel)
-                if el:
-                    title = el.get('content', '') or el.get_text(strip=True)
-                    if title:
-                        break
-
-            # 가격 추출
             price = ""
-            for sel in ['meta[property="product:price:amount"]',
-                        '.price', '.total_price', '#price',
-                        'meta[property="og:price:amount"]']:
-                el = soup.select_one(sel)
-                if el:
-                    price = el.get('content', '') or el.get_text(strip=True)
-                    if price:
-                        break
-
-            # 이미지 추출
             image_url = ""
-            og_img = soup.select_one('meta[property="og:image"]')
-            if og_img:
-                image_url = og_img.get('content', '')
+            desc = ""
 
-            # UI 업데이트
+            # ── 쿠팡 전용 스크래퍼 사용 ──
+            if "coupang.com" in url:
+                try:
+                    from affiliate_system.coupang_scraper import CoupangScraper
+                    scraper = CoupangScraper()
+                    product = scraper.scrape_product(url)
+                    title = product.title or ""
+                    price = product.price or ""
+                    image_url = (product.image_urls[0]
+                                 if product.image_urls else "")
+                    desc = product.description or ""
+                except Exception as ce:
+                    # 쿠팡 스크래퍼 실패시 URL에서 기본 정보 추출
+                    import re
+                    m = re.search(r'/products/(\d+)', url)
+                    prod_id = m.group(1) if m else ""
+                    title = f"쿠팡 상품 #{prod_id}" if prod_id else "쿠팡 상품"
+                    price = ""
+                    desc = (f"쿠팡 직접 스크래핑 제한됨 (봇 차단): "
+                            f"{str(ce)[:80]}\n"
+                            f"→ 크롬에서 상품 페이지를 열어 수동 확인하세요")
+            else:
+                # ── 일반 스크래핑 (네이버/알리/기타) ──
+                import requests
+                from bs4 import BeautifulSoup
+
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                                  'AppleWebKit/537.36 (KHTML, like Gecko) '
+                                  'Chrome/131.0.0.0 Safari/537.36',
+                    'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8',
+                    'Accept': 'text/html,application/xhtml+xml,'
+                              'application/xml;q=0.9,*/*;q=0.8',
+                    'Referer': 'https://www.google.com/',
+                }
+                session = requests.Session()
+                resp = session.get(
+                    url, headers=headers, timeout=15, allow_redirects=True)
+                resp.raise_for_status()
+                soup = BeautifulSoup(resp.text, 'html.parser')
+
+                # 제목 추출
+                for sel in ['meta[property="og:title"]',
+                            'meta[name="title"]',
+                            'h3.product_title',
+                            '.topCont_headgroup__title',
+                            'h1', 'title']:
+                    el = soup.select_one(sel)
+                    if el:
+                        title = (el.get('content', '')
+                                 or el.get_text(strip=True))
+                        if title and len(title) > 3:
+                            break
+
+                # 가격 추출
+                import re
+                for sel in ['meta[property="product:price:amount"]',
+                            'meta[property="og:price:amount"]',
+                            'span.price', '.total_price', '#price',
+                            'em.prd_price']:
+                    el = soup.select_one(sel)
+                    if el:
+                        raw = (el.get('content', '')
+                               or el.get_text(strip=True))
+                        if raw:
+                            nums = re.findall(r'[\d,]+', raw)
+                            if nums:
+                                try:
+                                    price = f"₩{int(nums[0].replace(',','')):,}"
+                                except ValueError:
+                                    price = raw
+                                break
+
+                # 이미지 추출
+                for sel in ['meta[property="og:image"]',
+                            'meta[property="og:image:url"]',
+                            '#repImg', '.product_thumb img']:
+                    el = soup.select_one(sel)
+                    if el:
+                        image_url = (el.get('content', '')
+                                     or el.get('src', '')
+                                     or el.get('data-src', ''))
+                        if image_url:
+                            if image_url.startswith('//'):
+                                image_url = 'https:' + image_url
+                            break
+
+                # 설명 추출
+                for sel in ['meta[property="og:description"]',
+                            'meta[name="description"]']:
+                    el = soup.select_one(sel)
+                    if el:
+                        desc = el.get('content', '')
+                        if desc:
+                            break
+
+            # ── UI 업데이트 ──
             if title:
-                self.lbl_title.setText(title[:80])
+                self.lbl_title.setText(title[:100])
+            else:
+                self.lbl_title.setText("(제목 추출 실패)")
+
             if price:
                 self.lbl_price.setText(price)
+            else:
+                self.lbl_price.setText("가격 정보 없음")
+
             if image_url:
                 try:
-                    img_data = requests.get(image_url, timeout=10).content
+                    img_resp = requests.get(
+                        image_url, headers=headers, timeout=10)
+                    img_data = img_resp.content
                     pm = QPixmap()
                     pm.loadFromData(img_data)
                     if not pm.isNull():
                         self.img_label.setPixmap(pm.scaled(
-                            280, 280,
+                            250, 250,
                             Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.SmoothTransformation))
+                        self.img_label.setStyleSheet(
+                            "background: #111827; border: 1px solid #1f2937;"
+                            " border-radius: 14px;")
                 except Exception:
-                    pass
+                    self.img_label.setText("이미지 로드 실패")
 
-            if title or price:
-                QMessageBox.information(
-                    self, "수집 완료",
-                    f"상품: {title[:50]}\n가격: {price or '정보 없음'}")
-            else:
-                QMessageBox.warning(
-                    self, "수집 실패",
-                    "상품 정보를 추출하지 못했습니다.\nURL을 확인해주세요.")
+            # 자동 썸네일 미리보기 활성화
+            if self.chk_auto_thumb.isChecked() and (title or image_url):
+                self.lbl_thumb_title.setVisible(True)
+                self.thumb_label.setVisible(True)
+                platforms_txt = []
+                if self.chk_yt.isChecked():
+                    platforms_txt.append("Shorts")
+                if self.chk_ig.isChecked():
+                    platforms_txt.append("Reels")
+                if self.chk_naver.isChecked():
+                    platforms_txt.append("블로그")
+                self.thumb_label.setText(
+                    f"✅ 자동 썸네일 생성 예정\n"
+                    f"플랫폼: {', '.join(platforms_txt)}\n"
+                    f"AI가 최적 레이아웃 설계")
+                self.thumb_label.setStyleSheet(
+                    "background: rgba(99, 102, 241, 0.1);"
+                    " border: 1px solid #6366f1;"
+                    " border-radius: 10px; color: #a5b4fc;"
+                    " font-size: 12px;")
+
+            # 스크래핑된 상품 정보 저장
+            self._scraped_product = {
+                'title': title, 'price': price,
+                'image_url': image_url, 'desc': desc,
+                'url': url, 'platform': platform_detected,
+            }
 
         except ImportError:
             QMessageBox.warning(
                 self, "라이브러리 필요",
                 "pip install requests beautifulsoup4\n패키지를 설치해주세요.")
         except Exception as e:
-            QMessageBox.warning(
-                self, "수집 실패", f"오류: {str(e)[:200]}")
+            self.lbl_title.setText(f"수집 오류: {str(e)[:60]}")
+            self.lbl_price.setText("")
         finally:
             self.btn_scrape.setEnabled(True)
             self.btn_scrape.setText("수집")
@@ -1093,6 +1409,7 @@ class ModeAWidget(QWidget):
             hook_directive=self.hook_input.toPlainText().strip(),
             target_platforms=platforms,
             created_at=datetime.now())
+        campaign.auto_thumbnail = self.chk_auto_thumb.isChecked()
         self.campaign_created.emit(campaign)
         self.url_input.clear()
 
@@ -1765,6 +2082,13 @@ class MainWindow(QMainWindow):
         self.settings_tab.settings_saved.connect(
             lambda: self.console.log("설정 저장 완료"))
 
+        # 편집 탭 → AI 검토 연동
+        self.editor_tab.send_to_review.connect(
+            self._on_editor_to_review)
+        # 편집 탭 → 구글 드라이브 업로드
+        self.editor_tab.upload_to_drive.connect(
+            self._on_editor_drive_upload)
+
     @pyqtSlot(object)
     def _on_campaign_created(self, campaign: Campaign):
         self.campaigns.append(campaign)
@@ -1775,7 +2099,37 @@ class MainWindow(QMainWindow):
         self.console.log(
             f"캠페인 생성: {campaign.id} → "
             f"{', '.join(p.value for p in campaign.target_platforms)}")
-        self.tabs.setCurrentWidget(self.dashboard_tab)
+
+        # 편집 탭에 캠페인 데이터 전달 (작업센터 → 편집 연동)
+        scraped = getattr(
+            self.command_tab.mode_a, '_scraped_product', None)
+        campaign_data = {
+            'id': campaign.id,
+            'title': (scraped or {}).get('title', ''),
+            'url': campaign.product.url,
+            'image_url': (scraped or {}).get('image_url', ''),
+            'platforms': [p.value for p in campaign.target_platforms],
+            'persona': campaign.persona,
+            'hook': campaign.hook_directive,
+        }
+        self.editor_tab.load_campaign(campaign_data)
+        self.tabs.setCurrentWidget(self.editor_tab)
+        self.console.log("편집 탭으로 캠페인 데이터 전달 완료")
+
+    @pyqtSlot(dict)
+    def _on_editor_to_review(self, review_data: dict):
+        """편집 탭 → AI 검토 탭 연동"""
+        self.console.log(
+            f"AI 검토 요청: 마커 {len(review_data.get('markers', []))}개, "
+            f"플랫폼: {review_data.get('platform', '전체')}")
+        self.tabs.setCurrentWidget(self.ai_review_tab)
+
+    @pyqtSlot(dict)
+    def _on_editor_drive_upload(self, upload_data: dict):
+        """편집 탭 → Google Drive 업로드"""
+        self.console.log(
+            f"Google Drive 업로드: {len(upload_data.get('files', []))}개 파일, "
+            f"플랫폼: {upload_data.get('platform', 'unknown')}")
 
     @pyqtSlot(list)
     def _on_batch_started(self, rows: list):

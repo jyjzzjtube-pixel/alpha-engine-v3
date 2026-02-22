@@ -644,14 +644,68 @@ class SceneData:
 # ══════════════════════════════════════════════════════════════
 
 class EditorTab(QWidget):
-    """이미지/동영상 편집 탭 -- MCN 자동화 파이프라인의 비주얼 에디터."""
+    """이미지/동영상 편집 탭 -- MCN 자동화 파이프라인의 비주얼 에디터.
+
+    플랫폼별 편집, Gemini 미디어 소싱, AI 검토 연동, 구글드라이브 업로드.
+    """
+
+    # 시그널: AI검토 탭으로 데이터 전달
+    send_to_review = pyqtSignal(dict)
+    # 시그널: 구글 드라이브 업로드 요청
+    upload_to_drive = pyqtSignal(dict)
+
+    PLATFORM_TABS = [
+        ("전체", "📋", "모든 플랫폼 공통 편집"),
+        ("네이버 블로그", "📝", "이미지 중심 블로그 포스트"),
+        ("YouTube Shorts", "🎬", "세로형 숏폼 영상 + 이미지"),
+        ("Instagram Reels", "📱", "릴스 영상 + 이미지 편집"),
+    ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current_image_path: str = ""
         self._references: list[ReferenceItem] = []
+        self._current_campaign = None
+        self._current_platform_idx = 0
+        self._gemini_results: list[dict] = []
         self._init_ui()
         self._refresh_scene_list()
+
+    # ── 작업센터 연동: 캠페인 로드 ──
+
+    def load_campaign(self, campaign_data: dict):
+        """작업센터에서 캠페인 데이터를 받아 편집 모드로 진입.
+
+        campaign_data keys: title, url, image_url, platforms, persona, hook
+        """
+        self._current_campaign = campaign_data
+        title = campaign_data.get('title', '(제목 없음)')
+        platforms = campaign_data.get('platforms', [])
+
+        # 캠페인 상품 이미지를 캔버스에 로드
+        img_url = campaign_data.get('image_url', '')
+        if img_url:
+            try:
+                import requests
+                resp = requests.get(img_url, timeout=10)
+                if resp.status_code == 200:
+                    temp_path = WORKSPACE / "campaign_preview.jpg"
+                    temp_path.write_bytes(resp.content)
+                    self._current_image_path = str(temp_path)
+                    self.canvas.load_image(str(temp_path))
+            except Exception:
+                pass
+
+        # 플랫폼 자동 선택
+        if platforms:
+            for i, (name, _, _) in enumerate(self.PLATFORM_TABS):
+                if any(p in name for p in platforms):
+                    self._switch_platform(i)
+                    break
+
+        self._campaign_label.setText(
+            f"📦 캠페인: {title[:50]}")
+        self._campaign_label.setVisible(True)
 
     # ── UI 구성 ──
 
@@ -659,6 +713,10 @@ class EditorTab(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 6, 10, 10)
         root.setSpacing(6)
+
+        # ── 플랫폼 선택 탭 (작업센터에서 연동) ──
+        platform_bar = self._build_platform_bar()
+        root.addWidget(platform_bar)
 
         # ── 도구 모음 ──
         toolbar = self._build_toolbar()
@@ -705,6 +763,279 @@ class EditorTab(QWidget):
         main_splitter.setStretchFactor(1, 1)
 
         root.addWidget(main_splitter)
+
+    # ── 플랫폼 선택 바 빌드 ──
+
+    def _build_platform_bar(self) -> QFrame:
+        frame = QFrame()
+        frame.setStyleSheet(
+            "QFrame { background: #0a0e1a; border: 1px solid #1f2937; "
+            "border-radius: 10px; }"
+        )
+        frame.setFixedHeight(44)
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setSpacing(6)
+
+        # 캠페인 라벨 (작업센터 연동시 표시)
+        self._campaign_label = QLabel("")
+        self._campaign_label.setStyleSheet(
+            "color: #a855f7; font-weight: 700; font-size: 12px; "
+            "border: none; padding: 0 8px;"
+        )
+        self._campaign_label.setVisible(False)
+        layout.addWidget(self._campaign_label)
+
+        # 플랫폼 선택 버튼
+        self._platform_buttons = []
+        for i, (name, icon, desc) in enumerate(self.PLATFORM_TABS):
+            btn = QPushButton(f"{icon} {name}")
+            btn.setCheckable(True)
+            btn.setChecked(i == 0)
+            btn.setFixedHeight(32)
+            btn.setToolTip(desc)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: transparent; color: #6b7280;
+                    border: 1px solid transparent; border-radius: 6px;
+                    padding: 4px 12px; font-size: 12px; font-weight: 700;
+                }
+                QPushButton:checked {
+                    background: #6366f1; color: white;
+                    border-color: #6366f1;
+                }
+                QPushButton:hover:!checked {
+                    background: #111827; color: #e5e7eb;
+                }
+            """)
+            btn.clicked.connect(lambda _, idx=i: self._switch_platform(idx))
+            layout.addWidget(btn)
+            self._platform_buttons.append(btn)
+
+        layout.addStretch()
+
+        # Gemini 미디어 소싱 버튼
+        btn_gemini = QPushButton("🤖 Gemini 미디어")
+        btn_gemini.setFixedHeight(32)
+        btn_gemini.setStyleSheet("""
+            QPushButton {
+                background: #1a1040; color: #a855f7;
+                border: 1px solid #a855f7; border-radius: 6px;
+                padding: 4px 12px; font-size: 12px; font-weight: 700;
+            }
+            QPushButton:hover { background: rgba(168, 85, 247, 0.15); }
+        """)
+        btn_gemini.clicked.connect(self._on_gemini_media)
+        layout.addWidget(btn_gemini)
+
+        # AI 검토 전송 버튼
+        btn_review = QPushButton("🔍 AI 검토")
+        btn_review.setFixedHeight(32)
+        btn_review.setStyleSheet("""
+            QPushButton {
+                background: #0d2818; color: #22c55e;
+                border: 1px solid #22c55e; border-radius: 6px;
+                padding: 4px 12px; font-size: 12px; font-weight: 700;
+            }
+            QPushButton:hover { background: rgba(34, 197, 94, 0.15); }
+        """)
+        btn_review.clicked.connect(self._on_send_to_review)
+        layout.addWidget(btn_review)
+
+        # Google Drive 업로드 버튼
+        btn_drive = QPushButton("☁️ Drive 업로드")
+        btn_drive.setFixedHeight(32)
+        btn_drive.setStyleSheet("""
+            QPushButton {
+                background: #1a1a0a; color: #f59e0b;
+                border: 1px solid #f59e0b; border-radius: 6px;
+                padding: 4px 12px; font-size: 12px; font-weight: 700;
+            }
+            QPushButton:hover { background: rgba(245, 158, 11, 0.15); }
+        """)
+        btn_drive.clicked.connect(self._on_drive_upload)
+        layout.addWidget(btn_drive)
+
+        return frame
+
+    def _switch_platform(self, idx: int):
+        """플랫폼 탭 전환"""
+        self._current_platform_idx = idx
+        for i, btn in enumerate(self._platform_buttons):
+            btn.setChecked(i == idx)
+        # 플랫폼별 UI 힌트 업데이트
+        hints = {
+            0: "모드: 전체 플랫폼",
+            1: "모드: 네이버 블로그 (이미지 편집)",
+            2: "모드: YouTube Shorts (영상+이미지)",
+            3: "모드: Instagram Reels (영상+이미지)",
+        }
+        self._mode_label.setText(hints.get(idx, "모드: 마커"))
+
+    # ── Gemini 미디어 소싱 ──
+
+    def _on_gemini_media(self):
+        """Gemini API로 이미지/영상 소싱 (나노바나나 Imagen + Veo)"""
+        platform_name = self.PLATFORM_TABS[self._current_platform_idx][0]
+
+        # 현재 캠페인 정보 가져오기
+        context = ""
+        if self._current_campaign:
+            context = (
+                f"상품: {self._current_campaign.get('title', '')}\n"
+                f"페르소나: {self._current_campaign.get('persona', '')}\n"
+                f"훅: {self._current_campaign.get('hook', '')}"
+            )
+
+        # Gemini 미디어 요청 다이얼로그
+        from PyQt6.QtWidgets import QInputDialog
+        prompt, ok = QInputDialog.getMultiLineText(
+            self, "🤖 Gemini 미디어 소싱",
+            f"[{platform_name}] 생성할 미디어 설명을 입력하세요.\n"
+            f"Gemini Imagen(이미지) / Veo(영상) 무료 생성.\n\n"
+            f"캠페인 정보:\n{context}" if context else
+            "생성할 이미지/영상에 대한 설명을 입력하세요:",
+            "제품 홍보용 세로형 이미지, 밝고 깔끔한 배경, 제품 중앙 배치"
+        )
+        if not ok or not prompt.strip():
+            return
+
+        self._ref_analysis.setPlainText("⏳ Gemini 미디어 생성 중...")
+        QApplication.processEvents()
+
+        try:
+            from affiliate_system.ai_generator import AIGenerator
+            gen = AIGenerator()
+
+            # Gemini로 이미지 생성 프롬프트 최적화
+            optimize_prompt = (
+                f"당신은 {platform_name} 콘텐츠 전문가입니다.\n"
+                f"다음 설명을 기반으로 최적의 이미지 생성 프롬프트를 만들어주세요:\n\n"
+                f"설명: {prompt}\n\n"
+                f"플랫폼: {platform_name}\n"
+                f"{'캠페인: ' + context if context else ''}\n\n"
+                f"다음을 포함하세요:\n"
+                f"1. 영문 이미지 생성 프롬프트 (Imagen/Stable Diffusion용)\n"
+                f"2. 한국어 추천 키워드 5개\n"
+                f"3. 무료 스톡 사이트(Pexels/Pixabay/Unsplash) 검색어 3개\n"
+                f"4. 컬러 팔레트 추천\n"
+                f"5. 레이아웃 가이드"
+            )
+            result = gen.generate_content(
+                optimize_prompt, max_tokens=2048, temperature=0.7)
+
+            if result:
+                self._ref_analysis.setPlainText(
+                    f"✅ Gemini 미디어 가이드 생성 완료\n"
+                    f"플랫폼: {platform_name}\n"
+                    f"{'='*50}\n\n{result}")
+                self._gemini_results.append({
+                    'platform': platform_name,
+                    'prompt': prompt,
+                    'result': result,
+                    'timestamp': datetime.now().isoformat(),
+                })
+            else:
+                self._ref_analysis.setPlainText(
+                    "⚠️ Gemini 응답이 비어있습니다. API 키를 확인하세요.")
+        except Exception as e:
+            self._ref_analysis.setPlainText(
+                f"❌ Gemini 미디어 소싱 오류: {str(e)[:200]}\n\n"
+                f"Gemini API 키를 설정 탭에서 확인하세요.")
+
+    # ── AI 검토 전송 ──
+
+    def _on_send_to_review(self):
+        """현재 편집 상태를 AI 검토 탭으로 전송"""
+        markers = self.canvas.get_markers()
+        regions = self.canvas.get_regions()
+
+        review_data = {
+            'image_path': self._current_image_path,
+            'markers': [m.to_dict() for m in markers],
+            'regions': [r.to_dict() for r in regions],
+            'references': [r.to_dict() for r in self._references],
+            'platform': self.PLATFORM_TABS[self._current_platform_idx][0],
+            'campaign': self._current_campaign,
+            'gemini_results': self._gemini_results,
+        }
+        self.send_to_review.emit(review_data)
+        QMessageBox.information(
+            self, "AI 검토 전송",
+            f"✅ 편집 데이터가 AI 검토 탭으로 전송되었습니다.\n"
+            f"마커: {len(markers)}개 / 영역: {len(regions)}개\n"
+            f"레퍼런스: {len(self._references)}개\n"
+            f"플랫폼: {self.PLATFORM_TABS[self._current_platform_idx][0]}"
+        )
+
+    # ── Google Drive 업로드 ──
+
+    def _on_drive_upload(self):
+        """편집 결과를 Google Drive에 자동 분류 업로드"""
+        files_to_upload = []
+
+        # 현재 이미지
+        if self._current_image_path and Path(self._current_image_path).exists():
+            files_to_upload.append(self._current_image_path)
+
+        # 레퍼런스 파일들
+        for ref in self._references:
+            if Path(ref.path).exists():
+                files_to_upload.append(ref.path)
+
+        if not files_to_upload:
+            QMessageBox.information(
+                self, "알림",
+                "업로드할 파일이 없습니다.\n이미지나 레퍼런스를 추가하세요.")
+            return
+
+        platform = self.PLATFORM_TABS[self._current_platform_idx][0]
+        campaign_id = (self._current_campaign or {}).get('id', 'unknown')
+
+        reply = QMessageBox.question(
+            self, "Google Drive 업로드",
+            f"📁 폴더 구조:\n"
+            f"  YJ_Partners_MCN/\n"
+            f"    └── {campaign_id}/\n"
+            f"        └── {platform}/\n\n"
+            f"업로드할 파일: {len(files_to_upload)}개\n"
+            f"계속하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        upload_data = {
+            'files': files_to_upload,
+            'platform': platform,
+            'campaign_id': campaign_id,
+        }
+        self.upload_to_drive.emit(upload_data)
+
+        # drive_manager 직접 호출 시도
+        try:
+            from affiliate_system.drive_manager import DriveArchiver
+            archiver = DriveArchiver()
+            if archiver.authenticate():
+                folder_id = archiver.create_campaign_folder(campaign_id)
+                for f in files_to_upload:
+                    archiver.upload_file(f, folder_id, platform)
+                self._ref_analysis.setPlainText(
+                    f"✅ Google Drive 업로드 완료!\n"
+                    f"폴더: YJ_Partners_MCN/{campaign_id}/{platform}\n"
+                    f"파일: {len(files_to_upload)}개")
+            else:
+                self._ref_analysis.setPlainText(
+                    "⚠️ Google Drive 인증 실패.\n"
+                    "설정 탭에서 OAuth 인증을 완료하세요.")
+        except ImportError:
+            self._ref_analysis.setPlainText(
+                "⚠️ drive_manager 모듈을 찾을 수 없습니다.\n"
+                f"업로드 요청 데이터: {len(files_to_upload)}개 파일")
+        except Exception as e:
+            self._ref_analysis.setPlainText(
+                f"⚠️ Drive 업로드 오류: {str(e)[:200]}\n"
+                "OAuth 토큰을 확인하세요.")
 
     # ── 도구 모음 빌드 ──
 
