@@ -439,6 +439,8 @@ class DriveArchiver:
                 result["errors"].append(msg)
 
         result["ok"] = result["files_uploaded"] == total
+        # 폴더 ID 반환 (영상 자동 업로드 등에서 활용)
+        result["folders"] = folders
         self.logger.info(
             "아카이빙 완료: %d/%d 파일 성공 (%d개 오류)",
             result["files_uploaded"],

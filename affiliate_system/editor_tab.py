@@ -668,6 +668,10 @@ class EditorTab(QWidget):
         self._current_campaign = None
         self._current_platform_idx = 0
         self._gemini_results: list[dict] = []
+        self._pipeline_results: dict | None = None
+        self._platform_contents: dict = {}
+        self._platform_thumbnails: dict = {}
+        self._platform_videos: dict = {}
         self._init_ui()
         self._refresh_scene_list()
 
@@ -706,6 +710,136 @@ class EditorTab(QWidget):
         self._campaign_label.setText(
             f"📦 캠페인: {title[:50]}")
         self._campaign_label.setVisible(True)
+
+    # ── 파이프라인 결과 로드 (전자동 모드) ──
+
+    def load_pipeline_results(self, results: dict):
+        """파이프라인 실행 결과를 편집 탭에 로드.
+
+        results keys:
+            campaign: Campaign 객체
+            platforms: {
+                "youtube": {"video": str, "thumbnail": str, "content": dict},
+                "instagram": {...},
+                "naver_blog": {...},
+            }
+            images: [str] 수집된 이미지 경로 리스트
+        """
+        self._pipeline_results = results
+        campaign = results.get("campaign")
+        platforms_data = results.get("platforms", {})
+        images = results.get("images", [])
+
+        # 캠페인 라벨 업데이트
+        title = ""
+        if campaign and hasattr(campaign, 'product'):
+            title = getattr(campaign.product, 'title', '') or ''
+        self._campaign_label.setText(
+            f"🚀 캠페인: {title[:40]} — 파이프라인 완료")
+        self._campaign_label.setVisible(True)
+
+        # 첫 번째 썸네일을 캔버스에 로드
+        first_thumb = ""
+        for p_name in ["naver_blog", "youtube", "instagram"]:
+            p_data = platforms_data.get(p_name, {})
+            thumb = p_data.get("thumbnail", "")
+            if thumb and Path(thumb).exists():
+                first_thumb = thumb
+                break
+
+        if first_thumb:
+            self._current_image_path = first_thumb
+            self.canvas.load_image(first_thumb)
+        elif images:
+            # 썸네일이 없으면 첫 번째 수집 이미지
+            for img in images:
+                if Path(img).exists():
+                    self._current_image_path = img
+                    self.canvas.load_image(img)
+                    break
+
+        # 레퍼런스 패널에 수집 이미지 자동 로드
+        for img_path in images[:10]:
+            if Path(img_path).exists():
+                try:
+                    self._add_reference(img_path)
+                except Exception:
+                    pass
+
+        # 콘텐츠 텍스트를 분석 패널에 표시
+        content_display = []
+        for p_name, p_data in platforms_data.items():
+            content = p_data.get("content", {})
+            thumb = p_data.get("thumbnail", "")
+            video = p_data.get("video", "")
+
+            p_label = {
+                "youtube": "🎬 YouTube Shorts",
+                "instagram": "📱 Instagram Reels",
+                "naver_blog": "📝 네이버 블로그",
+            }.get(p_name, p_name)
+
+            section = f"{'═'*50}\n{p_label}\n{'═'*50}\n"
+
+            # 제목
+            title = content.get("title", "")
+            if title:
+                section += f"■ 제목: {title}\n"
+
+            # 본문 (블로그)
+            body = content.get("body", "")
+            if body:
+                section += f"\n■ 본문 (상위 300자):\n{body[:300]}...\n"
+
+            # 나레이션 (영상)
+            narrations = content.get("narration", [])
+            if narrations:
+                section += f"\n■ 나레이션 ({len(narrations)}장면):\n"
+                for i, narr in enumerate(narrations[:5]):
+                    section += f"  [{i+1}] {narr[:80]}\n"
+
+            # 해시태그
+            hashtags = content.get("hashtags", [])
+            if hashtags:
+                section += f"\n■ 해시태그: {' '.join(hashtags[:15])}\n"
+
+            # CTA
+            cta = content.get("cta", "")
+            if cta:
+                section += f"\n■ CTA: {cta}\n"
+
+            # 썸네일/영상 경로
+            if thumb:
+                section += f"\n✓ 썸네일: {Path(thumb).name}\n"
+            if video:
+                section += f"✓ 영상: {Path(video).name}\n"
+
+            content_display.append(section)
+
+        if content_display:
+            self._ref_analysis.setPlainText(
+                "🚀 파이프라인 생성 결과\n\n" +
+                "\n\n".join(content_display)
+            )
+
+        # 플랫폼별 탭 전환 시 해당 콘텐츠 표시를 위해 데이터 저장
+        self._platform_contents = {}
+        self._platform_thumbnails = {}
+        self._platform_videos = {}
+        for p_name, p_data in platforms_data.items():
+            self._platform_contents[p_name] = p_data.get("content", {})
+            self._platform_thumbnails[p_name] = p_data.get("thumbnail", "")
+            self._platform_videos[p_name] = p_data.get("video", "")
+
+    def on_video_ready(self, platform_name: str, video_path: str):
+        """백그라운드 영상 렌더링 완료 시 호출."""
+        self._platform_videos[platform_name] = video_path
+        # 현재 분석 패널에 알림 추가
+        current = self._ref_analysis.toPlainText()
+        self._ref_analysis.setPlainText(
+            current + f"\n\n🎬 {platform_name} 영상 준비 완료: "
+            f"{Path(video_path).name}"
+        )
 
     # ── UI 구성 ──
 
@@ -859,7 +993,7 @@ class EditorTab(QWidget):
         return frame
 
     def _switch_platform(self, idx: int):
-        """플랫폼 탭 전환"""
+        """플랫폼 탭 전환 + 파이프라인 결과 자동 로드"""
         self._current_platform_idx = idx
         for i, btn in enumerate(self._platform_buttons):
             btn.setChecked(i == idx)
@@ -871,6 +1005,58 @@ class EditorTab(QWidget):
             3: "모드: Instagram Reels (영상+이미지)",
         }
         self._mode_label.setText(hints.get(idx, "모드: 마커"))
+
+        # 파이프라인 결과가 있으면 해당 플랫폼 콘텐츠 로드
+        if hasattr(self, '_platform_contents') and self._platform_contents:
+            platform_map = {
+                0: None,  # 전체 — 모든 콘텐츠
+                1: "naver_blog",
+                2: "youtube",
+                3: "instagram",
+            }
+            p_key = platform_map.get(idx)
+
+            if p_key and p_key in self._platform_thumbnails:
+                # 해당 플랫폼 썸네일 로드
+                thumb = self._platform_thumbnails.get(p_key, "")
+                if thumb and Path(thumb).exists():
+                    self._current_image_path = thumb
+                    self.canvas.load_image(thumb)
+
+                # 콘텐츠 텍스트 표시
+                content = self._platform_contents.get(p_key, {})
+                if content:
+                    lines = []
+                    title = content.get("title", "")
+                    body = content.get("body", "")
+                    narr = content.get("narration", [])
+                    hashtags = content.get("hashtags", [])
+                    cta = content.get("cta", "")
+
+                    if title:
+                        lines.append(f"■ 제목: {title}")
+                    if body:
+                        lines.append(f"\n■ 본문:\n{body[:500]}")
+                    if narr:
+                        lines.append(
+                            f"\n■ 나레이션 ({len(narr)}장면):")
+                        for i, n in enumerate(narr[:5]):
+                            lines.append(f"  [{i+1}] {n[:80]}")
+                    if hashtags:
+                        lines.append(
+                            f"\n■ 해시태그: {' '.join(hashtags[:15])}")
+                    if cta:
+                        lines.append(f"\n■ CTA: {cta}")
+
+                    video = self._platform_videos.get(p_key, "")
+                    if video and Path(video).exists():
+                        lines.append(
+                            f"\n🎬 영상: {Path(video).name}")
+
+                    self._ref_analysis.setPlainText(
+                        f"📋 [{p_key.upper()}] 콘텐츠\n\n"
+                        + "\n".join(lines)
+                    )
 
     # ── Gemini 미디어 소싱 ──
 
@@ -971,71 +1157,117 @@ class EditorTab(QWidget):
     # ── Google Drive 업로드 ──
 
     def _on_drive_upload(self):
-        """편집 결과를 Google Drive에 자동 분류 업로드"""
-        files_to_upload = []
-
-        # 현재 이미지
-        if self._current_image_path and Path(self._current_image_path).exists():
-            files_to_upload.append(self._current_image_path)
-
-        # 레퍼런스 파일들
-        for ref in self._references:
-            if Path(ref.path).exists():
-                files_to_upload.append(ref.path)
-
-        if not files_to_upload:
+        """파이프라인 결과 전체를 Google Drive에 자동 분류 업로드"""
+        if not self._pipeline_results:
             QMessageBox.information(
                 self, "알림",
-                "업로드할 파일이 없습니다.\n이미지나 레퍼런스를 추가하세요.")
+                "업로드할 파이프라인 결과가 없습니다.\n"
+                "먼저 캠페인을 생성하세요.")
             return
 
-        platform = self.PLATFORM_TABS[self._current_platform_idx][0]
-        campaign_id = (self._current_campaign or {}).get('id', 'unknown')
+        # 파이프라인 결과에서 모든 파일 수집
+        results = self._pipeline_results
+        campaign = results.get("campaign")
+        platforms_data = results.get("platforms", {})
+        images = results.get("images", [])
+
+        files_by_category = {
+            "images": [],    # 수집 이미지
+            "renders": [],   # 썸네일 + 영상
+            "logs": [],      # 텍스트 콘텐츠 (.txt)
+        }
+
+        # 1) 수집 이미지
+        for img_path in images:
+            if Path(img_path).exists():
+                files_by_category["images"].append(img_path)
+
+        # 2) 플랫폼별 썸네일 + 영상 + 텍스트 콘텐츠를 파일로 저장
+        from affiliate_system.config import RENDER_OUTPUT_DIR
+        campaign_id = campaign.id if campaign else "unknown"
+
+        for p_name, p_data in platforms_data.items():
+            # 썸네일
+            thumb = p_data.get("thumbnail", "")
+            if thumb and Path(thumb).exists():
+                files_by_category["renders"].append(thumb)
+
+            # 영상
+            video = self._platform_videos.get(p_name, "") or p_data.get("video", "")
+            if video and Path(video).exists():
+                files_by_category["renders"].append(video)
+
+            # AI 생성 텍스트를 파일로 저장
+            content = p_data.get("content", {})
+            if content:
+                txt_path = Path(RENDER_OUTPUT_DIR) / f"{campaign_id}_{p_name}_content.txt"
+                try:
+                    lines = []
+                    lines.append(f"[{p_name.upper()}] 콘텐츠")
+                    lines.append(f"{'='*50}")
+                    if content.get("title"):
+                        lines.append(f"제목: {content['title']}")
+                    if content.get("body"):
+                        lines.append(f"\n본문:\n{content['body']}")
+                    if content.get("narration"):
+                        narr = content["narration"]
+                        if isinstance(narr, list):
+                            lines.append(f"\n나레이션 ({len(narr)}장면):")
+                            for i, n in enumerate(narr):
+                                lines.append(f"  [{i+1}] {n}")
+                        else:
+                            lines.append(f"\n나레이션:\n{narr}")
+                    if content.get("hashtags"):
+                        tags = content["hashtags"]
+                        if isinstance(tags, list):
+                            lines.append(f"\n해시태그: {' '.join(tags)}")
+                        else:
+                            lines.append(f"\n해시태그: {tags}")
+                    if content.get("cta"):
+                        lines.append(f"\nCTA: {content['cta']}")
+
+                    txt_path.parent.mkdir(parents=True, exist_ok=True)
+                    txt_path.write_text("\n".join(lines), encoding="utf-8")
+                    files_by_category["logs"].append(str(txt_path))
+                except Exception:
+                    pass
+
+        total_files = sum(len(v) for v in files_by_category.values())
+        if total_files == 0:
+            QMessageBox.information(
+                self, "알림", "업로드할 파일이 없습니다.")
+            return
+
+        # 업로드 확인 다이얼로그
+        product_title = ""
+        if campaign and hasattr(campaign, 'product'):
+            product_title = getattr(campaign.product, 'title', '')[:30] or campaign_id
 
         reply = QMessageBox.question(
             self, "Google Drive 업로드",
-            f"📁 폴더 구조:\n"
-            f"  YJ_Partners_MCN/\n"
-            f"    └── {campaign_id}/\n"
-            f"        └── {platform}/\n\n"
-            f"업로드할 파일: {len(files_to_upload)}개\n"
+            f"📁 YJ_Partners_MCN/ 폴더에 업로드합니다\n\n"
+            f"캠페인: {product_title}\n"
+            f"렌더링 결과: {len(files_by_category['renders'])}개\n"
+            f"수집 이미지: {len(files_by_category['images'])}개\n"
+            f"콘텐츠 텍스트: {len(files_by_category['logs'])}개\n"
+            f"총 {total_files}개 파일\n\n"
             f"계속하시겠습니까?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        # main_ui에서 QThread로 처리하도록 시그널 전송
         upload_data = {
-            'files': files_to_upload,
-            'platform': platform,
+            'files': files_by_category,
+            'campaign': campaign,
             'campaign_id': campaign_id,
+            'total_files': total_files,
         }
         self.upload_to_drive.emit(upload_data)
-
-        # drive_manager 직접 호출 시도
-        try:
-            from affiliate_system.drive_manager import DriveArchiver
-            archiver = DriveArchiver()
-            if archiver.authenticate():
-                folder_id = archiver.create_campaign_folder(campaign_id)
-                for f in files_to_upload:
-                    archiver.upload_file(f, folder_id, platform)
-                self._ref_analysis.setPlainText(
-                    f"✅ Google Drive 업로드 완료!\n"
-                    f"폴더: YJ_Partners_MCN/{campaign_id}/{platform}\n"
-                    f"파일: {len(files_to_upload)}개")
-            else:
-                self._ref_analysis.setPlainText(
-                    "⚠️ Google Drive 인증 실패.\n"
-                    "설정 탭에서 OAuth 인증을 완료하세요.")
-        except ImportError:
-            self._ref_analysis.setPlainText(
-                "⚠️ drive_manager 모듈을 찾을 수 없습니다.\n"
-                f"업로드 요청 데이터: {len(files_to_upload)}개 파일")
-        except Exception as e:
-            self._ref_analysis.setPlainText(
-                f"⚠️ Drive 업로드 오류: {str(e)[:200]}\n"
-                "OAuth 토큰을 확인하세요.")
+        self._ref_analysis.setPlainText(
+            f"☁️ Google Drive 업로드 시작...\n"
+            f"총 {total_files}개 파일 업로드 중...")
 
     # ── 도구 모음 빌드 ──
 

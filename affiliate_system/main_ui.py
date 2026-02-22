@@ -8,6 +8,7 @@ PyQt6 기반 프로페셔널 다크테마 대시보드
 import sys
 import uuid
 import os
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -19,7 +20,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QProgressBar, QTableWidget, QTableWidgetItem,
     QFileDialog, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
     QGroupBox, QSplitter, QStatusBar, QMessageBox, QHeaderView,
-    QFrame, QScrollArea, QStackedWidget,
+    QFrame, QScrollArea, QStackedWidget, QDialog,
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, pyqtSlot, QTimer, QSize,
@@ -466,6 +467,343 @@ class BatchWorker(QThread):
 
     def stop(self):
         self._stop = True
+
+
+# ══════════════════════════════════════════════════════════════
+#  PipelineWorker — 전체 파이프라인을 QThread에서 실행
+# ══════════════════════════════════════════════════════════════
+
+class PipelineWorker(QThread):
+    """ContentPipeline.run()을 별도 스레드에서 실행.
+
+    UI를 프리징하지 않으면서 6단계 진행률을 시그널로 전달한다.
+    영상 렌더링은 skip_video=True일 때 건너뛰고 나중에
+    VideoRenderWorker가 백그라운드에서 처리한다.
+    """
+    progress = pyqtSignal(int, str, int)   # (step_num, step_name, percent)
+    step_detail = pyqtSignal(str)          # 세부 진행 메시지
+    finished_ok = pyqtSignal(dict)         # 파이프라인 결과
+    error = pyqtSignal(str)                # 에러 메시지
+
+    def __init__(
+        self,
+        topic_or_url: str,
+        platforms: list,
+        brand: str = "",
+        persona: str = "",
+        scraped_product: dict | None = None,
+        skip_video: bool = True,
+    ):
+        super().__init__()
+        self.topic_or_url = topic_or_url
+        self.platforms = platforms
+        self.brand = brand
+        self.persona = persona
+        self.scraped_product = scraped_product or {}
+        self.skip_video = skip_video
+
+    def run(self):
+        try:
+            from affiliate_system.pipeline import ContentPipeline
+            from affiliate_system.models import Product, Platform
+
+            pipeline = ContentPipeline()
+
+            # ── Step 1: 상품 정보 ──
+            self.progress.emit(1, "상품 정보 수집 중...", 5)
+            if self.scraped_product and self.scraped_product.get('title'):
+                # 이미 스크래핑된 데이터가 있으면 재사용
+                product = Product(
+                    url=self.scraped_product.get('url', self.topic_or_url),
+                    title=self.scraped_product.get('title', ''),
+                    price=self.scraped_product.get('price', ''),
+                    description=self.scraped_product.get('desc', ''),
+                    image_urls=[self.scraped_product['image_url']]
+                        if self.scraped_product.get('image_url') else [],
+                    scraped_at=datetime.now(),
+                )
+                self.step_detail.emit(
+                    f"  ✓ 기존 스크래핑 데이터 재사용: {product.title[:40]}")
+            elif self.topic_or_url.startswith('http'):
+                # URL이지만 스크래핑 데이터가 없는 경우
+                # 무한 재시도를 방지하기 위해 타임아웃 적용
+                self.step_detail.emit("  ⏳ URL 스크래핑 시도 (30초 제한)...")
+                import threading
+                result_holder = [None]
+
+                def _scrape():
+                    try:
+                        result_holder[0] = pipeline._prepare_product(
+                            self.topic_or_url)
+                    except Exception:
+                        pass
+
+                t = threading.Thread(target=_scrape, daemon=True)
+                t.start()
+                t.join(timeout=30)  # 최대 30초
+
+                if result_holder[0] and result_holder[0].title:
+                    product = result_holder[0]
+                    self.step_detail.emit(
+                        f"  ✓ 스크래핑 성공: {product.title[:40]}")
+                else:
+                    # 타임아웃/실패 → URL에서 기본 정보 추출
+                    from urllib.parse import urlparse
+                    parsed = urlparse(self.topic_or_url)
+                    path_parts = parsed.path.strip('/').split('/')
+                    product_id = path_parts[-1] if path_parts else 'unknown'
+                    product = Product(
+                        url=self.topic_or_url,
+                        title=f"쿠팡 상품 {product_id}",
+                        description=f"쿠팡 상품 URL: {self.topic_or_url}",
+                        scraped_at=datetime.now(),
+                    )
+                    self.step_detail.emit(
+                        f"  ⚠ 스크래핑 타임아웃 → "
+                        f"기본 정보로 진행: {product.title}")
+            else:
+                product = pipeline._prepare_product(self.topic_or_url)
+                self.step_detail.emit(f"  ✓ 상품: {product.title[:40]}")
+            self.progress.emit(1, "상품 정보 완료", 15)
+
+            # ── Step 2: AI 콘텐츠 생성 ──
+            self.progress.emit(2, "AI 콘텐츠 생성 중...", 20)
+            platform_contents = pipeline._generate_contents(
+                product, self.platforms, self.persona, self.brand,
+            )
+            for p_name, content in platform_contents.items():
+                title_len = len(content.get('title', ''))
+                self.step_detail.emit(f"  ✓ {p_name}: 제목 {title_len}자")
+            self.progress.emit(2, "AI 콘텐츠 생성 완료", 40)
+
+            # ── Step 3: 미디어 수집 ──
+            self.progress.emit(3, "스톡 이미지 수집 중...", 45)
+            images = pipeline._collect_media(product)
+            self.step_detail.emit(f"  ✓ 이미지 {len(images)}개 수집")
+            self.progress.emit(3, "미디어 수집 완료", 60)
+
+            # ── Step 4: 썸네일 생성 ──
+            self.progress.emit(4, "썸네일 생성 중...", 65)
+            import uuid as _uuid
+            campaign_id = _uuid.uuid4().hex[:8]
+            thumbnails = pipeline._generate_thumbnails(
+                self.platforms, platform_contents, images,
+                self.brand, campaign_id,
+            )
+            for p_name, thumb_path in thumbnails.items():
+                if thumb_path:
+                    self.step_detail.emit(f"  ✓ {p_name} 썸네일 생성")
+            self.progress.emit(4, "썸네일 생성 완료", 80)
+
+            # ── Step 5: 영상 렌더링 (skip 가능) ──
+            videos = {}
+            if self.skip_video:
+                self.progress.emit(5, "영상은 백그라운드에서 렌더링 예정", 85)
+                videos = {p.value: "" for p in self.platforms}
+            else:
+                self.progress.emit(5, "영상 렌더링 중...", 82)
+                videos = pipeline._render_videos(
+                    self.platforms, platform_contents, images,
+                    self.brand, campaign_id,
+                )
+                self.progress.emit(5, "영상 렌더링 완료", 95)
+
+            # ── 결과 조합 ──
+            from affiliate_system.models import (
+                Campaign, AIContent, CampaignStatus,
+            )
+            campaign = Campaign(
+                id=campaign_id,
+                product=product,
+                ai_content=AIContent(platform_contents=platform_contents),
+                status=CampaignStatus.COMPLETE,
+                target_platforms=self.platforms,
+                platform_videos=videos,
+                platform_thumbnails=thumbnails,
+                persona=self.persona,
+                created_at=datetime.now(),
+            )
+
+            results = {
+                "campaign": campaign,
+                "platforms": {},
+                "images": images,
+            }
+            for p in self.platforms:
+                p_name = p.value
+                results["platforms"][p_name] = {
+                    "video": videos.get(p_name, ""),
+                    "thumbnail": thumbnails.get(p_name, ""),
+                    "content": platform_contents.get(p_name, {}),
+                }
+
+            self.progress.emit(6, "파이프라인 완료!", 100)
+            self.finished_ok.emit(results)
+
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            self.error.emit(f"파이프라인 오류: {e}\n{tb}")
+
+
+class VideoRenderWorker(QThread):
+    """영상 렌더링을 백그라운드에서 실행.
+
+    파이프라인 완료 후 편집 탭에 결과가 표시된 상태에서
+    별도 스레드로 영상을 렌더링하고 완료 시 알림을 보낸다.
+    """
+    progress = pyqtSignal(str, int)        # (메시지, 진행률)
+    video_ready = pyqtSignal(str, str)     # (platform_name, video_path)
+    all_done = pyqtSignal()                # 전체 완료
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        platforms: list,
+        platform_contents: dict,
+        images: list,
+        brand: str,
+        campaign_id: str,
+    ):
+        super().__init__()
+        self.platforms = platforms
+        self.platform_contents = platform_contents
+        self.images = images
+        self.brand = brand
+        self.campaign_id = campaign_id
+
+    def run(self):
+        try:
+            from affiliate_system.pipeline import ContentPipeline
+            pipeline = ContentPipeline()
+
+            total = len(self.platforms)
+            for idx, platform in enumerate(self.platforms):
+                p_name = platform.value
+                self.progress.emit(
+                    f"영상 렌더링: {p_name} ({idx+1}/{total})",
+                    int(((idx) / total) * 100),
+                )
+                try:
+                    content = self.platform_contents.get(p_name, {})
+                    narrations = content.get("narration", [])
+                    cta = content.get("cta", "")
+                    body = content.get("body", "")
+
+                    from affiliate_system.models import RenderConfig, PLATFORM_PRESETS
+                    from affiliate_system.video_editor import VideoForge
+                    from affiliate_system.config import RENDER_OUTPUT_DIR
+
+                    output_path = str(
+                        Path(RENDER_OUTPUT_DIR) /
+                        f"{self.campaign_id}_{p_name}_video.mp4"
+                    )
+
+                    preset = PLATFORM_PRESETS[platform]
+                    config = RenderConfig.from_platform_preset(
+                        preset, brand=self.brand)
+                    forge = VideoForge(config=config)
+
+                    result = forge.render_for_platform(
+                        platform=platform,
+                        images=self.images[:5],
+                        narrations=narrations,
+                        output_path=output_path,
+                        subtitle_text=body[:200],
+                        brand=self.brand,
+                        cta_text=cta,
+                    )
+                    if result:
+                        self.video_ready.emit(p_name, result)
+                except Exception as e:
+                    self.progress.emit(f"영상 실패 ({p_name}): {e}", -1)
+
+            self.progress.emit("모든 영상 렌더링 완료!", 100)
+            self.all_done.emit()
+
+        except Exception as e:
+            self.error.emit(f"영상 렌더링 오류: {e}")
+
+
+class DriveUploadWorker(QThread):
+    """Google Drive 업로드를 백그라운드에서 실행.
+
+    파이프라인 결과 파일들을 Drive에 폴더 생성 후 업로드한다.
+    """
+    progress = pyqtSignal(int, int, str)   # (current, total, filename)
+    finished_ok = pyqtSignal(dict)         # {"ok", "folder_url", "files_uploaded", "errors"}
+    error = pyqtSignal(str)
+
+    def __init__(self, campaign, files_by_category: dict):
+        super().__init__()
+        self.campaign = campaign
+        self.files_by_category = files_by_category
+
+    def run(self):
+        try:
+            from affiliate_system.drive_manager import DriveArchiver
+            archiver = DriveArchiver()
+
+            if not archiver.authenticate():
+                self.error.emit(
+                    "Google Drive 인증 실패.\n"
+                    "DRIVE_CLIENT_ID / DRIVE_CLIENT_SECRET을 확인하세요.")
+                return
+
+            def _progress_cb(current, total, filename):
+                self.progress.emit(current, total, filename)
+
+            result = archiver.archive_campaign(
+                campaign=self.campaign,
+                files=self.files_by_category,
+                progress_callback=_progress_cb,
+            )
+            self.finished_ok.emit(result)
+
+        except Exception as e:
+            import traceback
+            self.error.emit(f"Drive 업로드 오류: {e}\n{traceback.format_exc()}")
+
+
+class _VideoDriveUploader(QThread):
+    """영상 1개를 Drive 렌더링_결과 폴더에 업로드하는 경량 워커.
+
+    GUI 스레드 안전: 모든 메시지를 log_msg 시그널로 전달.
+    """
+    log_msg = pyqtSignal(str)
+
+    def __init__(self, video_path: str, campaign_data: dict):
+        super().__init__()
+        self.video_path = video_path
+        self.campaign_data = campaign_data or {}
+
+    def run(self):
+        try:
+            from affiliate_system.drive_manager import DriveArchiver
+
+            archiver = DriveArchiver()
+            if not archiver.authenticate():
+                self.log_msg.emit("☁️ 영상 Drive 업로드 실패: 인증 오류")
+                return
+
+            renders_folder_id = self.campaign_data.get('renders_folder_id', '')
+            if not renders_folder_id:
+                campaign = self.campaign_data.get('campaign')
+                if campaign:
+                    folders = archiver._ensure_folder_structure(campaign)
+                    renders_folder_id = folders.get('renders', '')
+
+            if renders_folder_id:
+                result = archiver.upload_file(self.video_path, renders_folder_id)
+                if result.get('ok'):
+                    fname = Path(self.video_path).name
+                    self.log_msg.emit(f"☁️ 영상 Drive 업로드 완료: {fname}")
+                else:
+                    self.log_msg.emit("☁️ 영상 Drive 업로드 실패")
+            else:
+                self.log_msg.emit("☁️ Drive 폴더 ID를 찾을 수 없음")
+        except Exception as e:
+            self.log_msg.emit(f"☁️ 영상 업로드 오류: {str(e)[:100]}")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -2022,6 +2360,11 @@ class MainWindow(QMainWindow):
         self.console = LiveConsole()
 
         self._batch_worker = None
+        self._pipeline_worker = None
+        self._video_worker = None
+        self._drive_worker = None
+        self._drive_campaign_data = None  # Drive 업로드 후 영상 자동 업로드용
+        self._pipeline_dialog = None
 
         self._init_ui()
         self._connect_signals()
@@ -2100,36 +2443,339 @@ class MainWindow(QMainWindow):
             f"캠페인 생성: {campaign.id} → "
             f"{', '.join(p.value for p in campaign.target_platforms)}")
 
-        # 편집 탭에 캠페인 데이터 전달 (작업센터 → 편집 연동)
+        # ── 전체 파이프라인 실행 (PipelineWorker) ──
         scraped = getattr(
             self.command_tab.mode_a, '_scraped_product', None)
-        campaign_data = {
-            'id': campaign.id,
-            'title': (scraped or {}).get('title', ''),
-            'url': campaign.product.url,
-            'image_url': (scraped or {}).get('image_url', ''),
-            'platforms': [p.value for p in campaign.target_platforms],
-            'persona': campaign.persona,
-            'hook': campaign.hook_directive,
-        }
-        self.editor_tab.load_campaign(campaign_data)
+
+        url = campaign.product.url or ''
+        brand = getattr(campaign, 'persona', '') or ''
+
+        # 진행률 다이얼로그 생성
+        self._pipeline_dialog = QDialog(self)
+        self._pipeline_dialog.setWindowTitle("파이프라인 실행 중")
+        self._pipeline_dialog.setFixedSize(520, 320)
+        self._pipeline_dialog.setStyleSheet("""
+            QDialog {
+                background: #111827;
+                border: 2px solid #6366f1;
+                border-radius: 14px;
+            }
+            QLabel { color: #e2e8f0; border: none; }
+            QProgressBar {
+                border: none; border-radius: 6px;
+                background: #1f2937; height: 14px;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #6366f1, stop:1 #a855f7);
+                border-radius: 6px;
+            }
+        """)
+        dlg_layout = QVBoxLayout(self._pipeline_dialog)
+        dlg_layout.setContentsMargins(24, 20, 24, 20)
+        dlg_layout.setSpacing(12)
+
+        title_lbl = QLabel("🚀 전자동 콘텐츠 파이프라인")
+        title_lbl.setStyleSheet(
+            "font-size: 18px; font-weight: 900; color: #f9fafb;")
+        title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dlg_layout.addWidget(title_lbl)
+
+        self._pl_step_label = QLabel("준비 중...")
+        self._pl_step_label.setStyleSheet(
+            "font-size: 14px; font-weight: 700; color: #a5b4fc;")
+        self._pl_step_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dlg_layout.addWidget(self._pl_step_label)
+
+        self._pl_progress = QProgressBar()
+        self._pl_progress.setRange(0, 100)
+        self._pl_progress.setValue(0)
+        dlg_layout.addWidget(self._pl_progress)
+
+        self._pl_detail = QTextEdit()
+        self._pl_detail.setReadOnly(True)
+        self._pl_detail.setFixedHeight(120)
+        self._pl_detail.setStyleSheet("""
+            QTextEdit {
+                background: #0a0e1a; border: 1px solid #1f2937;
+                border-radius: 8px; color: #9ca3af; font-size: 12px;
+                font-family: 'Consolas', 'Malgun Gothic', monospace;
+            }
+        """)
+        dlg_layout.addWidget(self._pl_detail)
+
+        self._pipeline_dialog.show()
+
+        # PipelineWorker 시작
+        self._pipeline_worker = PipelineWorker(
+            topic_or_url=url,
+            platforms=campaign.target_platforms,
+            brand=brand,
+            persona=getattr(campaign, 'persona', ''),
+            scraped_product=scraped,
+            skip_video=True,  # 영상은 백그라운드에서 나중에
+        )
+        self._pipeline_worker.progress.connect(self._on_pipeline_progress)
+        self._pipeline_worker.step_detail.connect(self._on_pipeline_detail)
+        self._pipeline_worker.finished_ok.connect(self._on_pipeline_finished)
+        self._pipeline_worker.error.connect(self._on_pipeline_error)
+        self._pipeline_worker.start()
+
+        self.console.log("전자동 파이프라인 시작...")
+
+    @pyqtSlot(int, str, int)
+    def _on_pipeline_progress(self, step_num: int, step_name: str, pct: int):
+        """파이프라인 진행률 업데이트"""
+        self._pl_step_label.setText(f"[{step_num}/6] {step_name}")
+        self._pl_progress.setValue(pct)
+        self.console.log(f"파이프라인 [{step_num}/6] {step_name}")
+
+    @pyqtSlot(str)
+    def _on_pipeline_detail(self, msg: str):
+        """파이프라인 세부 메시지"""
+        self._pl_detail.append(msg)
+
+    @pyqtSlot(dict)
+    def _on_pipeline_finished(self, results: dict):
+        """파이프라인 완료 → 편집 탭에 결과 로드 + 영상 백그라운드 렌더링"""
+        self._pipeline_dialog.close()
+        self.console.log("파이프라인 완료! 편집 탭에 결과 로드 중...")
+
+        campaign = results.get("campaign")
+        if campaign:
+            # 캠페인 목록에 업데이트
+            for i, c in enumerate(self.campaigns):
+                if c.id == campaign.id:
+                    self.campaigns[i] = campaign
+                    break
+            self.dashboard_tab.update_campaigns(self.campaigns)
+
+        # 편집 탭에 파이프라인 결과 전달
+        self.editor_tab.load_pipeline_results(results)
         self.tabs.setCurrentWidget(self.editor_tab)
-        self.console.log("편집 탭으로 캠페인 데이터 전달 완료")
+        self.console.log("편집 탭에 모든 결과물 로드 완료!")
+
+        # 영상 렌더링 백그라운드 시작
+        platforms_data = results.get("platforms", {})
+        images = results.get("images", [])
+        if campaign and images:
+            platform_contents = {}
+            for p_name, p_data in platforms_data.items():
+                platform_contents[p_name] = p_data.get("content", {})
+
+            self._video_worker = VideoRenderWorker(
+                platforms=campaign.target_platforms,
+                platform_contents=platform_contents,
+                images=images,
+                brand=campaign.persona or "",
+                campaign_id=campaign.id,
+            )
+            self._video_worker.video_ready.connect(
+                self._on_video_ready)
+            self._video_worker.all_done.connect(
+                lambda: self.console.log("🎬 모든 영상 렌더링 완료!"))
+            self._video_worker.error.connect(
+                lambda e: self.console.log(f"영상 오류: {e}"))
+            self._video_worker.start()
+            self.console.log("🎬 영상 렌더링 백그라운드 시작...")
+
+    @pyqtSlot(str, str)
+    def _on_video_ready(self, platform_name: str, video_path: str):
+        """개별 영상 렌더링 완료 → 편집 탭 업데이트 + Drive 자동 업로드"""
+        self.console.log(f"🎬 {platform_name} 영상 준비 완료: {video_path}")
+        # 편집 탭에 영상 경로 업데이트
+        if hasattr(self.editor_tab, 'on_video_ready'):
+            self.editor_tab.on_video_ready(platform_name, video_path)
+
+        # 이미 Drive 업로드가 완료된 경우 → 영상도 자동 추가 업로드
+        if hasattr(self, '_drive_campaign_data') and self._drive_campaign_data:
+            from pathlib import Path
+            if Path(video_path).exists():
+                self.console.log(
+                    f"☁️ {platform_name} 영상 → Drive 자동 업로드 시작...")
+                self._auto_upload_video_to_drive(video_path)
+
+    def _auto_upload_video_to_drive(self, video_path: str):
+        """렌더링 완료된 영상을 Drive 렌더링_결과 폴더에 추가 업로드 (QThread)"""
+        worker = _VideoDriveUploader(
+            video_path,
+            self._drive_campaign_data,
+        )
+        worker.log_msg.connect(lambda msg: self.console.log(msg))
+        worker.finished.connect(lambda: worker.deleteLater())
+        # prevent GC by keeping reference
+        if not hasattr(self, '_video_uploaders'):
+            self._video_uploaders = []
+        self._video_uploaders.append(worker)
+        worker.finished.connect(
+            lambda: (self._video_uploaders.remove(worker)
+                     if worker in self._video_uploaders else None))
+        worker.start()
+
+    @pyqtSlot(str)
+    def _on_pipeline_error(self, error_msg: str):
+        """파이프라인 에러 처리"""
+        self._pipeline_dialog.close()
+        self.console.log(f"❌ 파이프라인 오류: {error_msg[:100]}")
+        QMessageBox.critical(
+            self, "파이프라인 오류",
+            f"콘텐츠 생성 중 오류가 발생했습니다:\n\n{error_msg[:300]}"
+        )
 
     @pyqtSlot(dict)
     def _on_editor_to_review(self, review_data: dict):
-        """편집 탭 → AI 검토 탭 연동"""
+        """편집 탭 → AI 검토 탭 연동 (실제 데이터 전달 + Gemini 검토)"""
         self.console.log(
             f"AI 검토 요청: 마커 {len(review_data.get('markers', []))}개, "
             f"플랫폼: {review_data.get('platform', '전체')}")
+
+        # 편집 탭의 파이프라인 결과에서 콘텐츠 추출
+        pipeline_results = getattr(
+            self.editor_tab, '_pipeline_results', None)
+        if pipeline_results:
+            # 플랫폼별 콘텐츠 텍스트 수집
+            content_parts = []
+            platforms_data = pipeline_results.get("platforms", {})
+            for p_name, p_data in platforms_data.items():
+                content = p_data.get("content", {})
+                title = content.get("title", "")
+                body = content.get("body", "")
+                hashtags = content.get("hashtags", [])
+                if title or body:
+                    content_parts.append(
+                        f"[{p_name}]\n제목: {title}\n본문: {body[:500]}\n"
+                        f"해시태그: {', '.join(hashtags[:10])}"
+                    )
+            if content_parts:
+                full_content = "\n\n".join(content_parts)
+                # AI 검토 탭의 입력 영역에 콘텐츠 설정
+                if hasattr(self.ai_review_tab, '_content_input'):
+                    self.ai_review_tab._content_input.setPlainText(
+                        full_content)
+                self.console.log("검토 콘텐츠 자동 입력 완료")
+
+            # 미디어 파일 경로도 전달 (썸네일, 이미지)
+            media_files = []
+            for p_name, p_data in platforms_data.items():
+                thumb = p_data.get("thumbnail", "")
+                if thumb and Path(thumb).exists():
+                    media_files.append(thumb)
+            images = pipeline_results.get("images", [])
+            media_files.extend([
+                img for img in images if Path(img).exists()])
+            if hasattr(self.ai_review_tab, '_preview_files'):
+                self.ai_review_tab._preview_files = media_files
+
         self.tabs.setCurrentWidget(self.ai_review_tab)
 
     @pyqtSlot(dict)
     def _on_editor_drive_upload(self, upload_data: dict):
-        """편집 탭 → Google Drive 업로드"""
+        """편집 탭 → Google Drive 업로드 (백그라운드 스레드)"""
+        campaign = upload_data.get('campaign')
+        files_by_category = upload_data.get('files', {})
+        total_files = upload_data.get('total_files', 0)
+
+        if not campaign or total_files == 0:
+            self.console.log("Drive 업로드: 업로드할 데이터 없음")
+            return
+
         self.console.log(
-            f"Google Drive 업로드: {len(upload_data.get('files', []))}개 파일, "
-            f"플랫폼: {upload_data.get('platform', 'unknown')}")
+            f"Google Drive 업로드 시작: {total_files}개 파일")
+
+        # 진행률 다이얼로그
+        self._drive_dialog = QDialog(self)
+        self._drive_dialog.setWindowTitle("Google Drive 업로드")
+        self._drive_dialog.setFixedSize(400, 150)
+        self._drive_dialog.setStyleSheet(
+            "QDialog { background: #111827; color: white; }"
+            "QLabel { color: white; font-size: 13px; }"
+        )
+        dlg_layout = QVBoxLayout(self._drive_dialog)
+        self._drive_label = QLabel("인증 중...")
+        dlg_layout.addWidget(self._drive_label)
+        self._drive_progress = QProgressBar()
+        self._drive_progress.setMaximum(total_files)
+        self._drive_progress.setStyleSheet(
+            "QProgressBar { background: #1f2937; border-radius: 4px; "
+            "text-align: center; color: white; }"
+            "QProgressBar::chunk { background: #f59e0b; border-radius: 4px; }"
+        )
+        dlg_layout.addWidget(self._drive_progress)
+        self._drive_dialog.show()
+
+        # 백그라운드 워커 실행
+        self._drive_worker = DriveUploadWorker(campaign, files_by_category)
+        self._drive_worker.progress.connect(self._on_drive_progress)
+        self._drive_worker.finished_ok.connect(self._on_drive_finished)
+        self._drive_worker.error.connect(self._on_drive_error)
+        self._drive_worker.start()
+
+    @pyqtSlot(int, int, str)
+    def _on_drive_progress(self, current: int, total: int, filename: str):
+        """Drive 업로드 진행률 업데이트"""
+        if hasattr(self, '_drive_label'):
+            self._drive_label.setText(
+                f"업로드 중... ({current}/{total}) {filename}")
+        if hasattr(self, '_drive_progress'):
+            self._drive_progress.setValue(current)
+
+    @pyqtSlot(dict)
+    def _on_drive_finished(self, result: dict):
+        """Drive 업로드 완료 → 캠페인 정보 저장 (영상 자동 업로드용)"""
+        if hasattr(self, '_drive_dialog'):
+            self._drive_dialog.close()
+
+        ok = result.get("ok", False)
+        uploaded = result.get("files_uploaded", 0)
+        folder_url = result.get("folder_url", "")
+        errors = result.get("errors", [])
+
+        # 영상 자동 업로드를 위해 캠페인 + Drive 폴더 정보 저장
+        if ok and hasattr(self, '_drive_worker') and self._drive_worker:
+            folders = result.get("folders", {})
+            self._drive_campaign_data = {
+                'campaign': self._drive_worker.campaign,
+                'folder_url': folder_url,
+                'renders_folder_id': folders.get('renders', ''),
+            }
+        else:
+            self._drive_campaign_data = None
+
+        # 영상 렌더링 진행 여부 체크
+        video_note = ""
+        if self._video_worker and self._video_worker.isRunning():
+            video_note = (
+                "\n\n🎬 영상 렌더링이 진행 중입니다.\n"
+                "완료되면 자동으로 Drive에 추가 업로드됩니다.")
+
+        if ok:
+            msg = (f"Google Drive 업로드 완료!\n"
+                   f"파일: {uploaded}개 업로드 성공")
+            if folder_url:
+                msg += f"\n\n폴더 링크:\n{folder_url}"
+            msg += video_note
+            self.console.log(f"Drive 업로드 완료: {uploaded}개 파일")
+            self.editor_tab._ref_analysis.setPlainText(
+                f"Google Drive 업로드 완료!\n"
+                f"파일: {uploaded}개\n"
+                f"폴더: {folder_url}"
+                f"{video_note}")
+        else:
+            msg = (f"일부 파일 업로드 실패\n"
+                   f"성공: {uploaded}개\n"
+                   f"오류: {len(errors)}개")
+            if errors:
+                msg += f"\n\n오류 상세:\n" + "\n".join(errors[:5])
+
+        QMessageBox.information(self, "Google Drive", msg)
+
+    @pyqtSlot(str)
+    def _on_drive_error(self, error_msg: str):
+        """Drive 업로드 오류"""
+        if hasattr(self, '_drive_dialog'):
+            self._drive_dialog.close()
+        self.console.log(f"Drive 업로드 오류: {error_msg[:100]}")
+        QMessageBox.warning(self, "Drive 업로드 오류", error_msg[:300])
 
     @pyqtSlot(list)
     def _on_batch_started(self, rows: list):
@@ -2178,6 +2824,15 @@ class MainWindow(QMainWindow):
             if self._batch_worker and self._batch_worker.isRunning():
                 self._batch_worker.stop()
                 self._batch_worker.wait(3000)
+            if self._pipeline_worker and self._pipeline_worker.isRunning():
+                self._pipeline_worker.terminate()
+                self._pipeline_worker.wait(3000)
+            if self._video_worker and self._video_worker.isRunning():
+                self._video_worker.terminate()
+                self._video_worker.wait(3000)
+            if self._drive_worker and self._drive_worker.isRunning():
+                self._drive_worker.terminate()
+                self._drive_worker.wait(3000)
             event.accept()
         else:
             event.ignore()
