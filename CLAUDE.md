@@ -44,6 +44,17 @@ python -m command_center.claude_helper --health
 - 봇 4개 (master-bot, kakao-bot, cost-api, shorts-factory)
 - 블로그 2개: `jyjzzj` (브릿지원), `ezsbizteam` (쿠팡)
 
+## 풀파워 모드 (항상 활성)
+- **브라우저 제어**: Claude in Chrome 확장프로그램으로 크롬 직접 제어
+- **크롬 끊김 시**: 즉시 `mcp__Claude_in_Chrome__tabs_context_mcp` 재연결 시도, 실패 시 Python으로 Chrome 재시작
+- **Gemini 활용 (무료 우선)**:
+  - Gemini #1 (뇌): 리서치, 분석, 문장 생성, 번역
+  - Gemini #2 (나노바나나): 이미지 생성
+  - Gemini Veo: 동영상 생성
+  - Canva: 디자인 편집
+- **작업 원칙**: 멈추지 말 것. 병렬 처리. 빠르고 스마트하게.
+- **도구 우선순위**: Gemini(무료) → Claude Code(구독내) → Claude API(최후)
+
 ## 코드 규칙
 - `load_dotenv(override=True)` 항상 사용
 - 한국어 주석 사용
