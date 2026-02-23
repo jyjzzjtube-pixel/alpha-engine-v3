@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 load_dotenv(_PROJECT / ".env", override=True)
 
 from command_center.config import (
-    GEMINI_API_KEY, ANTHROPIC_API_KEY,
+    GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
     COST_DB_PATH, BUDGET_LIMIT_KRW,
 )
@@ -224,6 +224,97 @@ def cmd_search(keyword, json_mode=False):
                     print(f"  {text[:100]}")
 
 
+def cmd_openai(prompt, model="gpt-4o-mini", json_mode=False):
+    """OpenAI API 호출"""
+    if not OPENAI_API_KEY:
+        print("ERROR: OPENAI_API_KEY not configured in .env", file=sys.stderr)
+        sys.exit(1)
+
+    from command_center.services.ai_service import AIService
+    svc = AIService()
+
+    try:
+        resp = svc.ask_openai(prompt, model=model)
+        if json_mode:
+            sys.stdout.buffer.write(json.dumps({
+                "response": resp.text, "model": resp.model,
+                "tokens": {"input": resp.input_tokens, "output": resp.output_tokens},
+                "cost_usd": resp.cost_usd, "elapsed_ms": resp.elapsed_ms,
+            }, ensure_ascii=False).encode("utf-8"))
+            sys.stdout.buffer.write(b"\n")
+        else:
+            sys.stdout.buffer.write(resp.text.encode("utf-8"))
+            sys.stdout.buffer.write(b"\n")
+    except Exception as e:
+        print(f"ERROR: OpenAI failed — {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_claude(prompt, model="claude-haiku-4-5-20251001", json_mode=False):
+    """Anthropic Claude API 호출"""
+    if not ANTHROPIC_API_KEY:
+        print("ERROR: ANTHROPIC_API_KEY not configured", file=sys.stderr)
+        sys.exit(1)
+
+    from command_center.services.ai_service import AIService
+    svc = AIService()
+
+    try:
+        resp = svc.ask_claude(prompt, model=model)
+        if json_mode:
+            sys.stdout.buffer.write(json.dumps({
+                "response": resp.text, "model": resp.model,
+                "tokens": {"input": resp.input_tokens, "output": resp.output_tokens},
+                "cost_usd": resp.cost_usd, "elapsed_ms": resp.elapsed_ms,
+            }, ensure_ascii=False).encode("utf-8"))
+            sys.stdout.buffer.write(b"\n")
+        else:
+            sys.stdout.buffer.write(resp.text.encode("utf-8"))
+            sys.stdout.buffer.write(b"\n")
+    except Exception as e:
+        print(f"ERROR: Claude API failed — {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_ai(prompt, provider=None, json_mode=False):
+    """통합 AI 호출 (자동 fallback chain)"""
+    from command_center.services.ai_service import AIService
+    svc = AIService()
+
+    resp = svc.ask(prompt, provider=provider)
+
+    if resp.error:
+        print(f"ERROR: {resp.error}", file=sys.stderr)
+        sys.exit(1)
+
+    if json_mode:
+        sys.stdout.buffer.write(json.dumps({
+            "response": resp.text, "provider": resp.provider, "model": resp.model,
+            "tokens": {"input": resp.input_tokens, "output": resp.output_tokens},
+            "cost_usd": resp.cost_usd, "elapsed_ms": resp.elapsed_ms,
+        }, ensure_ascii=False).encode("utf-8"))
+        sys.stdout.buffer.write(b"\n")
+    else:
+        sys.stdout.buffer.write(f"[{resp.provider}|{resp.model}] ".encode("utf-8"))
+        sys.stdout.buffer.write(resp.text.encode("utf-8"))
+        sys.stdout.buffer.write(b"\n")
+
+
+def cmd_ai_providers(json_mode=False):
+    """사용 가능한 AI 프로바이더 목록"""
+    from command_center.services.ai_service import AIService
+    svc = AIService()
+    providers = svc.list_providers()
+
+    if json_mode:
+        print(json.dumps(providers, ensure_ascii=False, indent=2))
+    else:
+        print("=== AI PROVIDERS ===")
+        for p in providers:
+            status = "OK" if p["available"] else "NO KEY"
+            print(f"  [{status:6s}] {p['name']:16s} {p['model']:35s} ({p['cost']})")
+
+
 # ── CLI 엔트리 ──
 
 def main():
@@ -234,12 +325,18 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--status", action="store_true", help="시스템 전체 상태")
     group.add_argument("--gemini", type=str, metavar="PROMPT", help="Gemini AI 분석 (무료)")
+    group.add_argument("--openai", type=str, metavar="PROMPT", help="OpenAI GPT 분석")
+    group.add_argument("--claude", type=str, metavar="PROMPT", help="Claude API 분석")
+    group.add_argument("--ai", type=str, metavar="PROMPT", help="통합 AI (자동 fallback)")
+    group.add_argument("--ai-providers", action="store_true", help="AI 프로바이더 목록")
     group.add_argument("--telegram", type=str, metavar="MSG", help="텔레그램 메시지 전송")
     group.add_argument("--health", action="store_true", help="사이트 건강검진")
     group.add_argument("--cost", action="store_true", help="API 비용 요약")
     group.add_argument("--search", type=str, metavar="KEYWORD", help="통합 검색")
 
     parser.add_argument("--json", action="store_true", help="JSON 형식 출력")
+    parser.add_argument("--model", type=str, default=None, help="AI 모델 지정 (예: gpt-4o, claude-sonnet-4-6-20250610)")
+    parser.add_argument("--provider", type=str, default=None, help="AI 프로바이더 지정 (--ai용)")
 
     args = parser.parse_args()
 
@@ -247,6 +344,16 @@ def main():
         cmd_status(args.json)
     elif args.gemini:
         cmd_gemini(args.gemini, args.json)
+    elif args.openai:
+        model = args.model or "gpt-4o-mini"
+        cmd_openai(args.openai, model=model, json_mode=args.json)
+    elif args.claude:
+        model = args.model or "claude-haiku-4-5-20251001"
+        cmd_claude(args.claude, model=model, json_mode=args.json)
+    elif args.ai:
+        cmd_ai(args.ai, provider=args.provider, json_mode=args.json)
+    elif getattr(args, "ai_providers", False):
+        cmd_ai_providers(args.json)
     elif args.telegram is not None:
         cmd_telegram(args.telegram, args.json)
     elif args.health:

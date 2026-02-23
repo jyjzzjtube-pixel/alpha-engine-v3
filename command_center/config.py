@@ -15,6 +15,7 @@ load_dotenv(PROJECT_DIR / ".env", override=True)
 # ── API 키 ──
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", ""))
 NETLIFY_TOKEN = "nfc_SVmjya7So89j4xPh5n6PB8JcsTGy23jk16d2"
@@ -29,9 +30,12 @@ COMMAND_CENTER_DB = str(BASE_DIR / "command_center.db")
 AI_PROVIDERS = {
     "gemini": {"model": "gemini-2.5-flash", "cost": "free", "priority": 1},
     "claude_haiku": {"model": "claude-haiku-4-5-20251001", "cost": "low", "priority": 2},
-    "claude_sonnet": {"model": "claude-sonnet-4-6-20250610", "cost": "high", "priority": 3},
+    "openai_mini": {"model": "gpt-4o-mini", "cost": "low", "priority": 2},
+    "openai": {"model": "gpt-4o", "cost": "medium", "priority": 3},
+    "claude_sonnet": {"model": "claude-sonnet-4-6-20250610", "cost": "high", "priority": 4},
+    "openai_o1": {"model": "o1", "cost": "high", "priority": 5},
 }
-AI_FALLBACK_CHAIN = ["gemini", "claude_haiku", "claude_sonnet"]
+AI_FALLBACK_CHAIN = ["gemini", "claude_haiku", "openai_mini", "openai", "claude_sonnet"]
 
 # ── 관리 사이트 ──
 MANAGED_SITES = [
