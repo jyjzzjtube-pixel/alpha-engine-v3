@@ -276,6 +276,58 @@ def cmd_claude(prompt, model="claude-haiku-4-5-20251001", json_mode=False):
         sys.exit(1)
 
 
+def cmd_ollama(prompt, model=None, json_mode=False):
+    """Ollama 로컬 AI 호출 (완전 무료, 오프라인)"""
+    from command_center.services.ai_service import AIService
+    svc = AIService()
+
+    if not svc._check_ollama():
+        print("ERROR: Ollama 서버가 꺼져있음. 'ollama serve' 실행 필요", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        resp = svc.ask_ollama(prompt, model=model)
+        if json_mode:
+            sys.stdout.buffer.write(json.dumps({
+                "response": resp.text, "model": resp.model,
+                "tokens": {"input": resp.input_tokens, "output": resp.output_tokens},
+                "cost_usd": 0.0, "elapsed_ms": resp.elapsed_ms,
+            }, ensure_ascii=False).encode("utf-8"))
+            sys.stdout.buffer.write(b"\n")
+        else:
+            sys.stdout.buffer.write(resp.text.encode("utf-8"))
+            sys.stdout.buffer.write(b"\n")
+    except Exception as e:
+        print(f"ERROR: Ollama failed — {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_gemini_pro(prompt, json_mode=False):
+    """Gemini Pro 호출 (울트라급, API 무료)"""
+    if not GEMINI_API_KEY:
+        print("ERROR: GEMINI_API_KEY not configured", file=sys.stderr)
+        sys.exit(1)
+
+    from command_center.services.ai_service import AIService
+    svc = AIService()
+
+    try:
+        resp = svc.ask_gemini_pro(prompt)
+        if json_mode:
+            sys.stdout.buffer.write(json.dumps({
+                "response": resp.text, "model": resp.model,
+                "tokens": {"input": resp.input_tokens, "output": resp.output_tokens},
+                "cost_usd": 0.0, "elapsed_ms": resp.elapsed_ms,
+            }, ensure_ascii=False).encode("utf-8"))
+            sys.stdout.buffer.write(b"\n")
+        else:
+            sys.stdout.buffer.write(resp.text.encode("utf-8"))
+            sys.stdout.buffer.write(b"\n")
+    except Exception as e:
+        print(f"ERROR: Gemini Pro failed — {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_ai(prompt, provider=None, json_mode=False):
     """통합 AI 호출 (자동 fallback chain)"""
     from command_center.services.ai_service import AIService
@@ -324,7 +376,9 @@ def main():
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--status", action="store_true", help="시스템 전체 상태")
-    group.add_argument("--gemini", type=str, metavar="PROMPT", help="Gemini AI 분석 (무료)")
+    group.add_argument("--ollama", type=str, metavar="PROMPT", help="Ollama 로컬 AI (무료, 오프라인)")
+    group.add_argument("--gemini", type=str, metavar="PROMPT", help="Gemini Flash 분석 (무료)")
+    group.add_argument("--gemini-pro", type=str, metavar="PROMPT", help="Gemini Pro 분석 (울트라급, 무료)")
     group.add_argument("--openai", type=str, metavar="PROMPT", help="OpenAI GPT 분석")
     group.add_argument("--claude", type=str, metavar="PROMPT", help="Claude API 분석")
     group.add_argument("--ai", type=str, metavar="PROMPT", help="통합 AI (자동 fallback)")
@@ -342,8 +396,12 @@ def main():
 
     if args.status:
         cmd_status(args.json)
+    elif args.ollama:
+        cmd_ollama(args.ollama, model=args.model, json_mode=args.json)
     elif args.gemini:
         cmd_gemini(args.gemini, args.json)
+    elif getattr(args, "gemini_pro", None):
+        cmd_gemini_pro(args.gemini_pro, json_mode=args.json)
     elif args.openai:
         model = args.model or "gpt-4o-mini"
         cmd_openai(args.openai, model=model, json_mode=args.json)

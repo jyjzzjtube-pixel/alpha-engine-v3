@@ -26,16 +26,24 @@ BUDGET_LIMIT_KRW = 50_000
 COST_DB_PATH = str(PROJECT_DIR / "api_usage.db")
 COMMAND_CENTER_DB = str(BASE_DIR / "command_center.db")
 
+# ── Ollama 로컬 설정 ──
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+
 # ── AI 하이브리드 설정 ──
+# 비용 순서: 로컬(무료) → Gemini(무료) → API(유료)
 AI_PROVIDERS = {
+    "ollama": {"model": OLLAMA_MODEL, "cost": "free-local", "priority": 0},
     "gemini": {"model": "gemini-2.5-flash", "cost": "free", "priority": 1},
+    "gemini_pro": {"model": "gemini-2.5-pro", "cost": "free", "priority": 1},
     "claude_haiku": {"model": "claude-haiku-4-5-20251001", "cost": "low", "priority": 2},
     "openai_mini": {"model": "gpt-4o-mini", "cost": "low", "priority": 2},
     "openai": {"model": "gpt-4o", "cost": "medium", "priority": 3},
     "claude_sonnet": {"model": "claude-sonnet-4-6-20250610", "cost": "high", "priority": 4},
     "openai_o1": {"model": "o1", "cost": "high", "priority": 5},
 }
-AI_FALLBACK_CHAIN = ["gemini", "claude_haiku", "openai_mini", "openai", "claude_sonnet"]
+# 폴백 체인: 로컬 무료 → 클라우드 무료 → 저가 → 고가
+AI_FALLBACK_CHAIN = ["gemini", "ollama", "claude_haiku", "openai_mini", "openai", "claude_sonnet"]
 
 # ── 관리 사이트 ──
 MANAGED_SITES = [

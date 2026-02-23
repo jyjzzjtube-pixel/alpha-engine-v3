@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-통합 AI 서비스 — Gemini / Claude / OpenAI 멀티 프로바이더
-비용 최적화: Gemini(무료) → Claude Haiku(저가) → OpenAI Mini(저가) → OpenAI(중가) → Claude Sonnet(고가)
+통합 AI 서비스 — Ollama(로컬) / Gemini / Claude / OpenAI 멀티 프로바이더
+비용 최적화: Ollama(로컬무료) → Gemini(무료) → Claude Haiku(저가) → OpenAI Mini(저가) → Claude Sonnet(고가)
 """
 import json
 import sys
@@ -11,6 +11,7 @@ from typing import Optional
 
 from command_center.config import (
     GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY,
+    OLLAMA_BASE_URL, OLLAMA_MODEL,
     AI_PROVIDERS, AI_FALLBACK_CHAIN,
 )
 
@@ -33,7 +34,9 @@ class AIService:
 
     # 모델별 USD/1K 토큰 가격 (input, output)
     PRICING = {
+        "llama3.1:8b":                   (0.0, 0.0),        # 로컬 무료
         "gemini-2.5-flash":              (0.0, 0.0),        # 무료
+        "gemini-2.5-pro":                (0.0, 0.0),        # 무료 (구독)
         "claude-haiku-4-5-20251001":     (0.001, 0.005),
         "gpt-4o-mini":                   (0.00015, 0.0006),
         "gpt-4o":                        (0.0025, 0.01),
@@ -45,6 +48,42 @@ class AIService:
         self._clients = {}
 
     # ── 프로바이더별 호출 ──
+
+    def _call_ollama(self, prompt: str, model: str = None,
+                     system: str = "", **kwargs) -> AIResponse:
+        """Ollama 로컬 AI 호출 (완전 무료, 인터넷 불필요)"""
+        import requests
+
+        model = model or OLLAMA_MODEL
+        t0 = time.time()
+
+        payload = {
+            "model": model,
+            "messages": [],
+            "stream": False,
+        }
+        if system:
+            payload["messages"].append({"role": "system", "content": system})
+        payload["messages"].append({"role": "user", "content": prompt})
+
+        resp = requests.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json=payload,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        elapsed = int((time.time() - t0) * 1000)
+
+        text = data.get("message", {}).get("content", "")
+        in_tok = data.get("prompt_eval_count", 0)
+        out_tok = data.get("eval_count", 0)
+
+        return AIResponse(
+            text=text.strip(), provider="ollama", model=model,
+            input_tokens=in_tok, output_tokens=out_tok,
+            elapsed_ms=elapsed, cost_usd=0.0,
+        )
 
     def _call_gemini(self, prompt: str, model: str = "gemini-2.5-flash",
                      system: str = "", **kwargs) -> AIResponse:
@@ -179,6 +218,14 @@ class AIService:
         """Gemini 직접 호출 단축 메서드"""
         return self._call_gemini(prompt, system=system)
 
+    def ask_gemini_pro(self, prompt: str, system: str = "") -> AIResponse:
+        """Gemini Pro 직접 호출 (울트라급 분석)"""
+        return self._call_gemini(prompt, model="gemini-2.5-pro", system=system)
+
+    def ask_ollama(self, prompt: str, model: str = None, system: str = "") -> AIResponse:
+        """Ollama 로컬 직접 호출 (완전 무료)"""
+        return self._call_ollama(prompt, model=model, system=system)
+
     def list_providers(self) -> list[dict]:
         """사용 가능한 프로바이더 목록"""
         result = []
@@ -199,7 +246,9 @@ class AIService:
         info = AI_PROVIDERS.get(provider, {})
         model = info.get("model", "")
 
-        if provider == "gemini":
+        if provider == "ollama":
+            return self._call_ollama(prompt, model=model, system=system, **kwargs)
+        elif provider in ("gemini", "gemini_pro"):
             return self._call_gemini(prompt, model=model, system=system, **kwargs)
         elif provider in ("claude_haiku", "claude_sonnet"):
             return self._call_anthropic(prompt, model=model, system=system,
@@ -211,14 +260,25 @@ class AIService:
             raise ValueError(f"알 수 없는 프로바이더: {provider}")
 
     def _is_available(self, provider: str) -> bool:
-        """프로바이더 키 존재 여부"""
-        if provider == "gemini":
+        """프로바이더 키 존재/서버 가동 여부"""
+        if provider == "ollama":
+            return self._check_ollama()
+        elif provider in ("gemini", "gemini_pro"):
             return bool(GEMINI_API_KEY)
         elif provider in ("claude_haiku", "claude_sonnet"):
             return bool(ANTHROPIC_API_KEY)
         elif provider in ("openai_mini", "openai", "openai_o1"):
             return bool(OPENAI_API_KEY)
         return False
+
+    def _check_ollama(self) -> bool:
+        """Ollama 서버 가동 여부 확인"""
+        try:
+            import requests
+            resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=2)
+            return resp.status_code == 200
+        except Exception:
+            return False
 
     def _calc_cost(self, model: str, in_tok: int, out_tok: int) -> float:
         """USD 비용 계산"""
