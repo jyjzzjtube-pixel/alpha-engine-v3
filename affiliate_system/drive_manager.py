@@ -43,8 +43,15 @@ _CHUNK_SIZE = 5 * 1024 * 1024
 # 루트 폴더 이름
 _ROOT_FOLDER_NAME = "YJ_Partners_MCN"
 
-# 캠페인 하위 폴더 이름 매핑
+# 캠페인 하위 폴더 — 플랫폼별 분류 (클릭 시 바로 확인 가능)
 _SUBFOLDER_NAMES = {
+    "naver_blog": "네이버블로그",
+    "instagram_shorts": "인스타그램숏츠",
+    "youtube_shorts": "유튜브숏츠",
+}
+
+# V1 호환용 (기존 캠페인과 하위 호환)
+_SUBFOLDER_NAMES_V1 = {
     "images": "원본_이미지",
     "renders": "렌더링_결과",
     "audio": "오디오",
@@ -211,10 +218,19 @@ class DriveArchiver:
             self._folder_cache[cache_key] = folder_id
         return folder_id
 
-    def _ensure_folder_structure(self, campaign: Campaign) -> dict[str, str]:
+    def _ensure_folder_structure(self, campaign: Campaign, v2: bool = False) -> dict[str, str]:
         """캠페인용 전체 폴더 계층을 생성한다.
 
-        구조::
+        V2 구조 (플랫폼별 — 바로 클릭해서 확인 가능)::
+
+            YJ_Partners_MCN/
+            └── 2026-02/
+                └── 20260224_제주삼다수_캠페인/
+                    ├── 네이버블로그/       ← 블로그 HTML + 이미지
+                    ├── 인스타그램숏츠/     ← 숏폼 영상 + 썸네일
+                    └── 유튜브숏츠/         ← 숏폼 영상 + 썸네일
+
+        V1 구조 (기존 호환)::
 
             YJ_Partners_MCN/
             └── 2026-02/
@@ -226,9 +242,10 @@ class DriveArchiver:
 
         Args:
             campaign: 캠페인 데이터 객체
+            v2: True면 플랫폼별 V2 구조, False면 기존 V1 구조
 
         Returns:
-            폴더 ID 딕셔너리 {"root", "images", "renders", "audio", "logs"}
+            폴더 ID 딕셔너리
         """
         self._ensure_service()
 
@@ -240,7 +257,7 @@ class DriveArchiver:
         month_name = created.strftime("%Y-%m")
         month_id = self._get_or_create_folder(month_name, root_id)
 
-        # 3) 캠페인 폴더: 20260220_상품명_캠페인
+        # 3) 캠페인 폴더: 20260224_상품명_캠페인
         date_prefix = created.strftime("%Y%m%d")
         product_name = campaign.product.title or campaign.id or "미정"
         # 파일명에 사용 불가한 문자 제거
@@ -252,15 +269,17 @@ class DriveArchiver:
         campaign_folder_name = f"{date_prefix}_{safe_name}_캠페인"
         campaign_id = self._get_or_create_folder(campaign_folder_name, month_id)
 
-        # 4) 하위 폴더들
+        # 4) 하위 폴더들 — V2 또는 V1
+        subfolder_map = _SUBFOLDER_NAMES if v2 else _SUBFOLDER_NAMES_V1
         result = {"root": campaign_id}
-        for key, folder_name in _SUBFOLDER_NAMES.items():
+        for key, folder_name in subfolder_map.items():
             result[key] = self._get_or_create_folder(folder_name, campaign_id)
 
         self.logger.info(
-            "폴더 구조 준비 완료: %s (%d개 하위 폴더)",
+            "폴더 구조 준비 완료: %s (%d개 하위 폴더, %s)",
             campaign_folder_name,
-            len(_SUBFOLDER_NAMES),
+            len(subfolder_map),
+            "V2 플랫폼별" if v2 else "V1 타입별",
         )
         return result
 
@@ -349,19 +368,25 @@ class DriveArchiver:
         campaign: Campaign,
         files: dict,
         progress_callback: Callable[[int, int, str], None] | None = None,
+        v2: bool = False,
     ) -> dict:
         """캠페인의 모든 파일을 Google Drive에 아카이빙한다.
 
+        V2 모드: 플랫폼별 폴더 (네이버블로그/인스타그램숏츠/유튜브숏츠)
+          files 키: "naver_blog", "instagram_shorts", "youtube_shorts"
+
+        V1 모드: 타입별 폴더 (원본_이미지/렌더링_결과/오디오/업로드_로그)
+          files 키: "images", "renders", "audio", "logs"
+
         Args:
             campaign:          캠페인 데이터 객체
-            files:             업로드할 파일 딕셔너리.
-                               키: "images", "renders", "audio", "logs"
-                               값: 로컬 파일 경로 리스트 (list[str])
+            files:             업로드할 파일 딕셔너리 (키→경로 리스트)
             progress_callback: 진행 콜백 (current, total, filename)
+            v2:                True면 플랫폼별 V2 구조
 
         Returns:
             {"ok": bool, "folder_url": str, "files_uploaded": int,
-             "errors": list[str]}
+             "errors": list[str], "platform_urls": dict}
         """
         self._ensure_service()
 
@@ -370,11 +395,12 @@ class DriveArchiver:
             "folder_url": "",
             "files_uploaded": 0,
             "errors": [],
+            "platform_urls": {},  # 플랫폼별 폴더 URL (V2)
         }
 
         # 폴더 구조 생성
         try:
-            folders = self._ensure_folder_structure(campaign)
+            folders = self._ensure_folder_structure(campaign, v2=v2)
         except Exception as exc:
             msg = f"폴더 구조 생성 실패: {exc}"
             self.logger.error(msg)
@@ -392,24 +418,31 @@ class DriveArchiver:
         except Exception:
             pass
 
-        # 카테고리별 파일 업로드
-        category_map = {
-            "images": "images",
-            "renders": "renders",
-            "audio": "audio",
-            "logs": "logs",
-        }
+        # V2: 플랫폼별 폴더 URL도 수집
+        if v2:
+            for platform_key in ("naver_blog", "instagram_shorts", "youtube_shorts"):
+                fid = folders.get(platform_key)
+                if fid:
+                    try:
+                        meta = self._service.files().get(
+                            fileId=fid, fields="webViewLink"
+                        ).execute()
+                        result["platform_urls"][platform_key] = meta.get("webViewLink", "")
+                    except Exception:
+                        pass
 
+        # 파일 → 폴더 매핑 (V2, V1 공용)
         all_files: list[tuple[str, str]] = []  # (local_path, folder_id)
-        for category, folder_key in category_map.items():
-            file_list = files.get(category, [])
+        for category, file_list in files.items():
             if not file_list:
                 continue
-            target_folder_id = folders.get(folder_key)
+            target_folder_id = folders.get(category)
             if not target_folder_id:
+                # V1 키로 시도 (하위 호환)
                 continue
             for fp in file_list:
-                all_files.append((fp, target_folder_id))
+                if fp and Path(fp).exists():
+                    all_files.append((fp, target_folder_id))
 
         total = len(all_files)
         if total == 0:
