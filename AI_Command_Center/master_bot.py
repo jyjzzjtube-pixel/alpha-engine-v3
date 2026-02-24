@@ -25,7 +25,12 @@ from dotenv import load_dotenv
 
 # ─── Load .env from parent franchise-db directory ───
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(ENV_PATH)
+load_dotenv(ENV_PATH, override=True)
+
+# ─── Claude Code Bridge ───
+FRANCHISE_DB_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(FRANCHISE_DB_DIR))
+from command_center.telegram_bridge import TaskQueue, run_claude_code
 
 # ─── Configuration ───
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -215,13 +220,17 @@ def build_bot():
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome = (
             "AI Command Center Online\n\n"
-            "Available Commands:\n"
+            "Claude Code:\n"
+            "/cc <task> - Claude Code 실시간 실행\n"
+            "/queue <task> - 큐에 추가 (세션에서 처리)\n"
+            "/tasks - 작업 목록\n\n"
+            "AI:\n"
             "/ai <prompt> - Gemini AI query\n"
-            "/summary <text> - Text summarization\n"
+            "/summary <text> - Text summarization\n\n"
+            "System:\n"
             "/screenshot - Capture current screen\n"
-            "/download <url> - Download a file\n"
             "/exec <cmd> - Execute shell command\n"
-            "/cost [detail] - API cost report (KRW/USD)\n"
+            "/cost [detail] - API cost report\n"
             "/status - System status check\n"
             "/help - Show this message"
         )
@@ -366,6 +375,71 @@ def build_bot():
         await file.download_to_drive(str(filepath))
         await update.message.reply_text(f"Saved to: {filepath}")
 
+    # ── /cc — Claude Code 실시간 실행 ──
+    @auth_required
+    async def cmd_cc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        task_text = " ".join(context.args) if context.args else ""
+        if not task_text:
+            await update.message.reply_text(
+                "Usage: /cc <작업 내용>\n"
+                "Claude Code가 즉시 실행합니다 (Max Plan, 추가비용 0)"
+            )
+            return
+
+        await update.message.reply_text(f"Claude Code 작업 시작...\n> {task_text[:200]}")
+
+        result = await run_claude_code(task_text)
+
+        if result["ok"]:
+            text = result["result"] or "(no output)"
+            # 긴 결과 분할
+            for i in range(0, len(text), 4000):
+                await update.message.reply_text(text[i:i+4000])
+        else:
+            await update.message.reply_text(f"[FAILED] {result['error']}")
+
+    # ── /queue — 큐에 작업 추가 ──
+    @auth_required
+    async def cmd_queue(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        task_text = " ".join(context.args) if context.args else ""
+        if not task_text:
+            await update.message.reply_text(
+                "Usage: /queue <작업 내용>\n"
+                "다음 Claude Code 세션에서 자동 처리됩니다."
+            )
+            return
+
+        queue = TaskQueue()
+        task = queue.add(task_text, source="telegram")
+        await update.message.reply_text(
+            f"Task #{task['id']} queued\n"
+            f"> {task_text[:200]}\n\n"
+            f"다음 Claude Code 세션에서 처리됩니다."
+        )
+
+    # ── /tasks — 작업 목록 ──
+    @auth_required
+    async def cmd_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        queue = TaskQueue()
+        pending = queue.get_pending()
+        recent = queue.get_all(limit=5)
+
+        lines = ["[Task Queue]"]
+        if pending:
+            lines.append(f"\nPending ({len(pending)}):")
+            for t in pending:
+                lines.append(f"  #{t['id']} {t['message'][:60]}")
+        else:
+            lines.append("\nNo pending tasks")
+
+        if recent:
+            lines.append(f"\nRecent:")
+            for t in recent:
+                icon = {"pending": "...", "in_progress": ">>", "completed": "OK", "failed": "XX"}.get(t["status"], "??")
+                lines.append(f"  [{icon}] #{t['id']} {t['message'][:50]}")
+
+        await update.message.reply_text("\n".join(lines))
+
     # ── /cost ──
     @auth_required
     async def cmd_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -433,6 +507,9 @@ def build_bot():
     app.add_handler(CommandHandler("exec", cmd_exec))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("cost", cmd_cost))
+    app.add_handler(CommandHandler("cc", cmd_cc))
+    app.add_handler(CommandHandler("queue", cmd_queue))
+    app.add_handler(CommandHandler("tasks", cmd_tasks))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

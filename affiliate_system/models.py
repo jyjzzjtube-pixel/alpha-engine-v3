@@ -1,13 +1,13 @@
 """
-Affiliate Marketing System — Data Models
-=========================================
-플랫폼별 프리셋, 브랜딩 템플릿, BGM 장르, 전환 효과 등
-프로 퀄리티 콘텐츠 생성을 위한 핵심 데이터 모델.
+Affiliate Marketing System — Data Models V2
+=============================================
+플랫폼별 프리셋, 브랜딩 템플릿, BGM 장르, 전환 효과,
+V2 블로그/숏폼/대화형 파이프라인 데이터 모델.
 """
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Callable
 
 
 # ═══════════════════════════════════════════════════════════════════════════

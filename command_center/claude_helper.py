@@ -37,6 +37,7 @@ def cmd_status(json_mode=False):
     from command_center.services.site_monitor import SiteMonitor
     from command_center.services.cost_service import CostService
     from command_center.database import Database
+    from command_center.telegram_bridge import TaskQueue
 
     # 사이트
     monitor = SiteMonitor()
@@ -52,6 +53,10 @@ def cmd_status(json_mode=False):
     db = Database()
     unread = db.get_unread_count()
 
+    # 큐
+    queue = TaskQueue()
+    pending = queue.get_pending()
+
     # 서비스 가용성
     gemini_ok = bool(GEMINI_API_KEY)
     telegram_ok = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
@@ -62,6 +67,7 @@ def cmd_status(json_mode=False):
             "cost": {"today_krw": s["today_krw"], "monthly_krw": s["monthly_krw"],
                      "budget_pct": s["budget_pct"], "budget_limit": BUDGET_LIMIT_KRW},
             "alerts": {"unread": unread},
+            "queue": {"pending": len(pending), "tasks": [{"id": t["id"], "message": t["message"][:80]} for t in pending]},
             "services": {"gemini": gemini_ok, "telegram": telegram_ok},
             "timestamp": datetime.now().isoformat(),
         }, ensure_ascii=False, indent=2))
@@ -75,6 +81,13 @@ def cmd_status(json_mode=False):
         print(site_str)
         print(f"COST: W{s['today_krw']:,} today | W{s['monthly_krw']:,} month | {s['budget_pct']}% budget (W{BUDGET_LIMIT_KRW:,} limit)")
         print(f"ALERTS: {unread} unread")
+        # 큐 상태
+        if pending:
+            print(f"QUEUE: {len(pending)} pending tasks!")
+            for t in pending:
+                print(f"  #{t['id']}: {t['message'][:60]}")
+        else:
+            print("QUEUE: empty")
         print(f"GEMINI: {'available' if gemini_ok else 'not configured'}")
         print(f"TELEGRAM: {'configured' if telegram_ok else 'not configured'}")
         print(f"TIME: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -352,6 +365,48 @@ def cmd_ai(prompt, provider=None, json_mode=False):
         sys.stdout.buffer.write(b"\n")
 
 
+def cmd_queue_check(json_mode=False):
+    """큐에 대기 중인 작업 확인"""
+    from command_center.telegram_bridge import TaskQueue
+
+    queue = TaskQueue()
+    pending = queue.get_pending()
+    recent = queue.get_all(limit=10)
+
+    if json_mode:
+        print(json.dumps({
+            "pending": pending,
+            "recent": recent,
+        }, ensure_ascii=False, indent=2, default=str))
+    else:
+        if pending:
+            print(f"=== PENDING TASKS ({len(pending)}) ===")
+            for t in pending:
+                print(f"  #{t['id']} [{t['source']}] {t['message'][:80]}")
+                print(f"       created: {t['created_at']}")
+        else:
+            print("No pending tasks in queue.")
+
+        if recent:
+            print(f"\n--- Recent ({len(recent)}) ---")
+            for t in recent:
+                icon = {"pending": "...", "in_progress": ">>", "completed": "OK", "failed": "XX"}.get(t["status"], "??")
+                print(f"  [{icon}] #{t['id']} {t['message'][:60]}")
+
+
+def cmd_queue_add(message, json_mode=False):
+    """큐에 작업 추가"""
+    from command_center.telegram_bridge import TaskQueue
+
+    queue = TaskQueue()
+    task = queue.add(message, source="cli")
+
+    if json_mode:
+        print(json.dumps(task, ensure_ascii=False, indent=2, default=str))
+    else:
+        print(f"Task #{task['id']} added to queue: {message[:80]}")
+
+
 def cmd_ai_providers(json_mode=False):
     """사용 가능한 AI 프로바이더 목록"""
     from command_center.services.ai_service import AIService
@@ -387,6 +442,8 @@ def main():
     group.add_argument("--health", action="store_true", help="사이트 건강검진")
     group.add_argument("--cost", action="store_true", help="API 비용 요약")
     group.add_argument("--search", type=str, metavar="KEYWORD", help="통합 검색")
+    group.add_argument("--queue-check", action="store_true", help="큐 대기 작업 확인")
+    group.add_argument("--queue-add", type=str, metavar="TASK", help="큐에 작업 추가")
 
     parser.add_argument("--json", action="store_true", help="JSON 형식 출력")
     parser.add_argument("--model", type=str, default=None, help="AI 모델 지정 (예: gpt-4o, claude-sonnet-4-6-20250610)")
@@ -420,6 +477,10 @@ def main():
         cmd_cost(args.json)
     elif args.search:
         cmd_search(args.search, args.json)
+    elif getattr(args, "queue_check", False):
+        cmd_queue_check(args.json)
+    elif getattr(args, "queue_add", None):
+        cmd_queue_add(args.queue_add, args.json)
 
 
 if __name__ == "__main__":
