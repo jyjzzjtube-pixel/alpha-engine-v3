@@ -583,18 +583,20 @@ class EmotionTTSEngine:
 class SubtitleGenerator:
     """ASS 자막 파일 생성기 — Whisper 단어 타임스탬프 기반."""
 
-    # ASS 헤더 (숏폼 최적화 스타일)
+    # ASS 헤더 (프로 숏폼 최적화 스타일 V3)
     ASS_HEADER = """[Script Info]
-Title: V2 Shorts Subtitle
+Title: V3 Pro Shorts Subtitle
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
 WrapStyle: 0
+ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Pretendard,70,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,0,2,50,50,200,1
-Style: Highlight,Pretendard,75,&H0000BFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,0,2,50,50,200,1
+Style: Default,Pretendard,74,&H00FFFFFF,&H000000FF,&H00000000,&H96000000,1,0,0,0,100,100,1,0,1,3.5,1,2,60,60,90,1
+Style: Emphasis,Pretendard,78,&H0080FFFF,&H000000FF,&H00000000,&H96000000,1,0,0,0,100,100,1,0,1,4,1,2,60,60,90,1
+Style: Highlight,Pretendard,82,&H0000BFFF,&H000000FF,&H00000000,&H96000000,1,0,0,0,100,100,1,0,1,4.5,2,2,60,60,90,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -983,6 +985,655 @@ class ShortsRenderer:
                 f"{uid}_tts_list.txt",
                 f"{uid}_tts_concat.mp3",
                 f"{uid}_silence_*.mp3",
+            ]
+            for pattern in patterns:
+                for f in self.output_dir.glob(pattern):
+                    try:
+                        f.unlink()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 프로 품질 숏폼 렌더링 엔진 V3
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 상품 유형별 BGM 장르 매핑 (잔잔한 상품 소개 스타일)
+PRODUCT_BGM_MAP = {
+    "식품": "chill",
+    "음료": "chill",
+    "화장품": "lofi",
+    "뷰티": "lofi",
+    "생활용품": "chill",
+    "세제": "chill",
+    "전자기기": "cinematic",
+    "가전": "cinematic",
+    "패션": "trendy",
+    "의류": "trendy",
+    "건강": "lofi",
+    "다이어트": "upbeat",
+    "유아": "chill",
+    "반려동물": "chill",
+    "스포츠": "energetic",
+    "default": "chill",
+}
+
+
+def _detect_bgm_genre(product_name: str, category: str = "") -> str:
+    """상품명/카테고리에서 적절한 BGM 장르를 자동 감지."""
+    text = f"{product_name} {category}".lower()
+    for keyword, genre in PRODUCT_BGM_MAP.items():
+        if keyword in text:
+            return genre
+    return PRODUCT_BGM_MAP["default"]
+
+
+class ProShortsRenderer:
+    """프로 품질 숏폼 렌더링 — VideoForge 모션 이펙트 + BGM + 컬러 그레이딩.
+
+    기존 ShortsRenderer의 FFmpeg 기반 구조를 유지하면서,
+    VideoForge의 모션 이펙트, BGM 생성, 안티밴 기법을 통합.
+    """
+
+    def __init__(self, output_dir: Optional[Path] = None):
+        """프로 렌더러 초기화."""
+        self.output_dir = output_dir or V2_SHORTS_DIR
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.encoder = _get_encoder()
+        self.logger = logger
+        # VideoForge 모션 이펙트 + BGM 엔진 임포트
+        self._forge = None
+        self._effect_presets = None
+
+    def _ensure_forge(self):
+        """VideoForge 엔진 지연 로딩 (순환 임포트 방지)."""
+        if self._forge is None:
+            try:
+                from affiliate_system.video_editor import (
+                    VideoForge, EFFECT_PRESETS, BGM_GENRE_PARAMS
+                )
+                from affiliate_system.models import RenderConfig, Platform
+                # 숏폼 설정으로 VideoForge 초기화
+                cfg = RenderConfig(
+                    width=SHORTS_RESOLUTION[0],
+                    height=SHORTS_RESOLUTION[1],
+                    fps=SHORTS_FPS,
+                    platform=Platform.YOUTUBE_SHORTS,
+                )
+                self._forge = VideoForge(cfg)
+                self._effect_presets = EFFECT_PRESETS
+                self._bgm_params = BGM_GENRE_PARAMS
+                self.logger.info("VideoForge 엔진 로딩 완료 (모션+BGM)")
+            except Exception as e:
+                self.logger.warning(f"VideoForge 로딩 실패, 폴백 모드: {e}")
+                self._forge = None
+
+    def render_pro_shorts(
+        self,
+        scenes: list[dict],
+        campaign_id: str = "",
+        subtitle_path: Optional[str] = None,
+        product_name: str = "",
+        category: str = "",
+        bgm_genre: Optional[str] = None,
+    ) -> Optional[str]:
+        """프로 품질 숏폼 영상 렌더링.
+
+        Args:
+            scenes: [{"video_clip_path", "tts_path", "tts_duration", "text", "emotion"}, ...]
+            campaign_id: 파일명용
+            subtitle_path: ASS 자막 경로
+            product_name: 상품명 (BGM 장르 자동 매칭용)
+            category: 카테고리 (BGM 장르 매칭용)
+            bgm_genre: BGM 장르 직접 지정 (None이면 자동 감지)
+
+        Returns:
+            최종 영상 경로
+        """
+        uid = campaign_id or uuid.uuid4().hex[:8]
+        output_path = str(self.output_dir / f"{uid}_shorts_final.mp4")
+
+        try:
+            self._ensure_forge()
+
+            # 유효한 장면 필터링
+            valid_scenes = [
+                s for s in scenes
+                if s.get("video_clip_path") and Path(s["video_clip_path"]).exists()
+            ]
+            if not valid_scenes:
+                self.logger.error("유효한 비디오 클립이 없습니다!")
+                return None
+
+            self.logger.info(f"ProShortsRenderer 시작: {len(valid_scenes)}장면")
+
+            # ── Step 1: 모션 이펙트 적용 + 트림 ──
+            motion_clips = self._apply_motion_effects(valid_scenes, uid)
+            if not motion_clips:
+                self.logger.error("모션 이펙트 적용된 클립이 없습니다!")
+                return None
+
+            # ── Step 2: 크로스페이드 전환 + concat ──
+            concat_video = self._concat_with_crossfade(motion_clips, uid)
+            if not concat_video:
+                self.logger.error("크로스페이드 concat 실패!")
+                return None
+
+            # ── Step 3: BGM 생성 ──
+            total_duration = sum(s.get("tts_duration", 3.0) for s in motion_clips)
+            if not bgm_genre:
+                bgm_genre = _detect_bgm_genre(product_name, category)
+            bgm_path = self._generate_bgm(total_duration, bgm_genre, uid)
+
+            # ── Step 4: TTS 오디오 연결 ──
+            tts_concat = self._concat_tts_audio(motion_clips, uid)
+
+            # ── Step 5: 컬러 그레이딩 + 자막 + 오디오 믹싱 → 최종 합성 ──
+            success = self._compose_final(
+                concat_video, tts_concat, bgm_path,
+                subtitle_path, output_path, uid
+            )
+
+            # 임시 파일 정리
+            self._cleanup_temp_files(uid)
+
+            if success and Path(output_path).exists():
+                out_info = _run_ffprobe(output_path)
+                size_mb = Path(output_path).stat().st_size / 1024 / 1024
+                self.logger.info(
+                    f"프로 숏폼 렌더링 완료: {Path(output_path).name} "
+                    f"({out_info.get('duration', 0):.1f}s, {size_mb:.1f}MB, "
+                    f"BGM={bgm_genre})"
+                )
+                return output_path
+            else:
+                self.logger.error("프로 숏폼 최종 렌더링 실패")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"ProShortsRenderer 예외: {e}", exc_info=True)
+            self._cleanup_temp_files(uid)
+            return None
+
+    # ------------------------------------------------------------------
+    #  Step 1: 모션 이펙트 적용
+    # ------------------------------------------------------------------
+
+    def _apply_motion_effects(
+        self, scenes: list[dict], uid: str
+    ) -> list[dict]:
+        """각 장면 비디오에 모션 이펙트(줌인/아웃, 팬, 드리프트 등) 적용.
+
+        VideoForge.apply_motion_effect() 재사용.
+        MoviePy로 모션 적용 → 임시 파일로 export → FFmpeg로 최종 인코딩.
+        """
+        effects_list = ["zoom_in", "pan_right", "tilt_up", "zoom_out",
+                        "diag_dr", "pulse", "pan_left", "drift",
+                        "tilt_down", "zoom_rotate", "diag_dl", "bounce"]
+        result_scenes = []
+
+        for idx, scene in enumerate(scenes):
+            clip_path = scene["video_clip_path"]
+            duration = scene.get("tts_duration", 3.0)
+            if duration <= 0:
+                duration = 3.0
+
+            # 총 길이 제한
+            current_total = sum(s.get("tts_duration", 3.0) for s in result_scenes)
+            if current_total + duration > SHORTS_MAX_DURATION:
+                duration = max(1.0, SHORTS_MAX_DURATION - current_total)
+                if duration < 1.0:
+                    break
+
+            effect_name = effects_list[idx % len(effects_list)]
+            motion_path = str(self.output_dir / f"{uid}_motion_{idx}.mp4")
+
+            if self._forge:
+                # MoviePy 모션 이펙트 적용
+                success = self._apply_single_motion(
+                    clip_path, motion_path, effect_name, duration, idx, len(scenes)
+                )
+            else:
+                success = False
+
+            if not success:
+                # 폴백: 모션 없이 트림만 (기존 ShortsRenderer 방식)
+                success = self._trim_clip_only(clip_path, motion_path, duration, idx, len(scenes))
+
+            if success and Path(motion_path).exists():
+                new_scene = scene.copy()
+                new_scene["_trimmed_path"] = motion_path
+                new_scene["tts_duration"] = duration
+                result_scenes.append(new_scene)
+            else:
+                self.logger.warning(f"클립 {idx+1} 처리 실패: {Path(clip_path).name}")
+
+        return result_scenes
+
+    def _apply_single_motion(
+        self, input_path: str, output_path: str,
+        effect_name: str, duration: float,
+        idx: int, total: int,
+    ) -> bool:
+        """단일 클립에 MoviePy 모션 이펙트 적용 → MP4 export."""
+        try:
+            from affiliate_system.video_editor import VideoForge
+            # MoviePy 임포트
+            try:
+                from moviepy import VideoFileClip
+                moviepy_v2 = True
+            except ImportError:
+                from moviepy.editor import VideoFileClip  # type: ignore
+                moviepy_v2 = False
+
+            self.logger.info(
+                f"모션 이펙트 적용 [{idx+1}/{total}]: {effect_name}"
+            )
+
+            clip = VideoFileClip(input_path)
+
+            # duration 트림
+            if clip.duration and clip.duration > duration:
+                if moviepy_v2:
+                    clip = clip.subclipped(0, duration)
+                else:
+                    clip = clip.subclip(0, duration)
+            elif clip.duration and clip.duration < duration:
+                duration = clip.duration
+
+            # 해상도 리사이즈 (1080x1920)
+            w, h = SHORTS_RESOLUTION
+            if moviepy_v2:
+                clip = clip.resized((w, h))
+                clip = clip.with_fps(SHORTS_FPS)
+            else:
+                clip = clip.resize((w, h))
+                clip = clip.set_fps(SHORTS_FPS)
+
+            # 모션 이펙트 적용 (VideoForge 재사용)
+            clip = VideoForge.apply_motion_effect(clip, effect_name, zoom_ratio=1.15)
+
+            # 안티밴: 약간의 해상도 지터 (±2~4px)
+            jitter_w = w + random.choice([-4, -2, 0, 2, 4])
+            jitter_h = h + random.choice([-4, -2, 0, 2, 4])
+            jitter_w = jitter_w // 2 * 2  # 짝수 보장
+            jitter_h = jitter_h // 2 * 2
+
+            # 임시 MoviePy export (오디오 없이)
+            temp_moviepy = str(self.output_dir / f"{Path(output_path).stem}_mp.mp4")
+            if moviepy_v2:
+                clip.write_videofile(
+                    temp_moviepy, codec="libx264", audio=False,
+                    fps=SHORTS_FPS, preset="fast",
+                    logger=None,
+                )
+            else:
+                clip.write_videofile(
+                    temp_moviepy, codec="libx264", audio=False,
+                    fps=SHORTS_FPS, preset="fast",
+                    verbose=False, logger=None,
+                )
+            clip.close()
+
+            # FFmpeg로 최종 인코딩 (해상도 통일 + 컬러 그레이딩)
+            vf = (
+                f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,"
+                f"eq=contrast=1.05:brightness=0.02:saturation=1.08,"
+                f"unsharp=3:3:0.5"
+            )
+
+            enc_args = [
+                "-i", temp_moviepy,
+                "-vf", vf,
+                "-an",
+                "-c:v", self.encoder,
+                "-pix_fmt", "yuv420p",
+            ]
+            if self.encoder == "h264_nvenc":
+                enc_args += ["-preset", FFMPEG_PRESET, "-rc", "constqp", "-qp", "20"]
+            else:
+                enc_args += ["-preset", "fast", "-crf", "20"]
+            enc_args.append(output_path)
+
+            success = _run_ffmpeg(enc_args, desc=f"모션+컬러 인코딩 {idx+1}/{total}")
+
+            # 임시 파일 삭제
+            try:
+                Path(temp_moviepy).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            return success
+
+        except Exception as e:
+            self.logger.warning(f"모션 이펙트 적용 실패 [{idx+1}]: {e}")
+            return False
+
+    def _trim_clip_only(
+        self, input_path: str, output_path: str,
+        duration: float, idx: int, total: int,
+    ) -> bool:
+        """모션 없이 트림+리사이즈+컬러그레이딩만 (폴백)."""
+        w, h = SHORTS_RESOLUTION
+        vf = (
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,"
+            f"fps={SHORTS_FPS},"
+            f"eq=contrast=1.05:brightness=0.02:saturation=1.08,"
+            f"unsharp=3:3:0.5"
+        )
+        args = [
+            "-i", input_path,
+            "-t", str(round(duration, 3)),
+            "-vf", vf,
+            "-an",
+            "-c:v", self.encoder,
+            "-pix_fmt", "yuv420p",
+        ]
+        if self.encoder == "h264_nvenc":
+            args += ["-preset", FFMPEG_PRESET, "-rc", "constqp", "-qp", "20"]
+        else:
+            args += ["-preset", "fast", "-crf", "20"]
+        args.append(output_path)
+        return _run_ffmpeg(args, desc=f"트림+컬러 {idx+1}/{total}")
+
+    # ------------------------------------------------------------------
+    #  Step 2: 크로스페이드 전환 + concat
+    # ------------------------------------------------------------------
+
+    def _concat_with_crossfade(
+        self, scenes: list[dict], uid: str
+    ) -> Optional[str]:
+        """FFmpeg xfade 필터로 크로스페이드 전환 적용.
+
+        2개 이상 클립: xfade 필터 체인
+        1개 클립: 그냥 복사
+        """
+        if not scenes:
+            return None
+
+        output_path = str(self.output_dir / f"{uid}_concat.mp4")
+
+        if len(scenes) == 1:
+            # 단일 클립 → 그냥 복사
+            import shutil
+            shutil.copy2(scenes[0]["_trimmed_path"], output_path)
+            return output_path
+
+        if len(scenes) == 2:
+            # 2개 클립: 단순 xfade
+            xfade_dur = 0.4
+            offset = max(0.1, scenes[0].get("tts_duration", 3.0) - xfade_dur)
+            args = [
+                "-i", scenes[0]["_trimmed_path"],
+                "-i", scenes[1]["_trimmed_path"],
+                "-filter_complex",
+                f"[0:v][1:v]xfade=transition=fade:duration={xfade_dur}:offset={offset}[v]",
+                "-map", "[v]",
+                "-c:v", self.encoder,
+                "-pix_fmt", "yuv420p",
+            ]
+            if self.encoder == "h264_nvenc":
+                args += ["-preset", FFMPEG_PRESET, "-rc", "constqp", "-qp", "20"]
+            else:
+                args += ["-preset", "fast", "-crf", "20"]
+            args.append(output_path)
+            return output_path if _run_ffmpeg(args, desc="크로스페이드 전환") else None
+
+        # 3개 이상: xfade 체인 구성
+        xfade_dur = 0.3
+        transitions = ["fade", "slideleft", "slideright", "slideup",
+                        "circlecrop", "dissolve", "pixelize", "wipeleft"]
+
+        # FFmpeg xfade 체인 빌드
+        inputs = []
+        for sc in scenes:
+            inputs += ["-i", sc["_trimmed_path"]]
+
+        # 필터 체인 구성
+        filter_parts = []
+        cumulative_offset = 0.0
+        prev_label = "[0:v]"
+
+        for i in range(1, len(scenes)):
+            transition = transitions[i % len(transitions)]
+            offset = max(0.1, cumulative_offset + scenes[i-1].get("tts_duration", 3.0) - xfade_dur)
+            cumulative_offset = offset
+
+            if i < len(scenes) - 1:
+                out_label = f"[v{i}]"
+            else:
+                out_label = "[vout]"
+
+            filter_parts.append(
+                f"{prev_label}[{i}:v]xfade=transition={transition}"
+                f":duration={xfade_dur}:offset={offset}{out_label}"
+            )
+            prev_label = out_label
+
+        filter_complex = ";".join(filter_parts)
+
+        args = inputs + [
+            "-filter_complex", filter_complex,
+            "-map", "[vout]",
+            "-c:v", self.encoder,
+            "-pix_fmt", "yuv420p",
+        ]
+        if self.encoder == "h264_nvenc":
+            args += ["-preset", FFMPEG_PRESET, "-rc", "constqp", "-qp", "20"]
+        else:
+            args += ["-preset", "fast", "-crf", "20"]
+        args.append(output_path)
+
+        success = _run_ffmpeg(args, desc=f"크로스페이드 전환 ({len(scenes)}클립)", timeout=600)
+        if success:
+            return output_path
+
+        # 폴백: xfade 실패 시 단순 concat
+        self.logger.warning("xfade 실패, 단순 concat으로 폴백")
+        return self._simple_concat(scenes, uid)
+
+    def _simple_concat(self, scenes: list[dict], uid: str) -> Optional[str]:
+        """단순 concat (xfade 실패 시 폴백)."""
+        output_path = str(self.output_dir / f"{uid}_concat.mp4")
+        list_path = str(self.output_dir / f"{uid}_clips.txt")
+
+        with open(list_path, "w", encoding="utf-8") as f:
+            for sc in scenes:
+                p = sc["_trimmed_path"].replace("\\", "/")
+                f.write(f"file '{p}'\n")
+
+        args = ["-f", "concat", "-safe", "0", "-i", list_path, "-c", "copy", output_path]
+        return output_path if _run_ffmpeg(args, desc="단순 concat 폴백") else None
+
+    # ------------------------------------------------------------------
+    #  Step 3: BGM 자동 생성
+    # ------------------------------------------------------------------
+
+    def _generate_bgm(
+        self, duration: float, genre: str, uid: str
+    ) -> Optional[str]:
+        """VideoForge.generate_bgm_pro() 재사용하여 BGM 생성."""
+        bgm_path = str(self.output_dir / f"{uid}_bgm.wav")
+        try:
+            self._ensure_forge()
+            if self._forge:
+                from affiliate_system.video_editor import VideoForge
+                VideoForge.generate_bgm_pro(bgm_path, duration + 2.0, genre)
+                if Path(bgm_path).exists():
+                    self.logger.info(f"BGM 생성 완료: {genre} ({duration:.1f}s)")
+                    return bgm_path
+            self.logger.warning("BGM 생성 실패")
+            return None
+        except Exception as e:
+            self.logger.warning(f"BGM 생성 예외: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    #  Step 4: TTS 오디오 연결 (기존 ShortsRenderer와 동일)
+    # ------------------------------------------------------------------
+
+    def _concat_tts_audio(
+        self, scenes: list[dict], uid: str
+    ) -> Optional[str]:
+        """장면별 TTS 오디오를 순서대로 연결."""
+        output_path = str(self.output_dir / f"{uid}_tts_concat.mp3")
+        list_path = str(self.output_dir / f"{uid}_tts_list.txt")
+
+        try:
+            entries = []
+            for idx, scene in enumerate(scenes):
+                tts_path = scene.get("tts_path", "")
+                duration = scene.get("tts_duration", 3.0)
+
+                if tts_path and Path(tts_path).exists():
+                    entries.append(tts_path)
+                else:
+                    # 무음 생성
+                    silence_path = str(self.output_dir / f"{uid}_silence_{idx}.mp3")
+                    silence_ok = _run_ffmpeg(
+                        ["-f", "lavfi", "-i",
+                         f"anullsrc=r=44100:cl=mono",
+                         "-t", str(round(duration, 3)),
+                         "-c:a", "libmp3lame", "-b:a", "128k",
+                         silence_path],
+                        desc=f"무음 생성 ({duration:.1f}s)"
+                    )
+                    if silence_ok:
+                        entries.append(silence_path)
+
+            if not entries:
+                return None
+
+            with open(list_path, "w", encoding="utf-8") as f:
+                for path in entries:
+                    p = path.replace("\\", "/")
+                    f.write(f"file '{p}'\n")
+
+            success = _run_ffmpeg(
+                ["-f", "concat", "-safe", "0",
+                 "-i", list_path,
+                 "-c:a", "libmp3lame", "-b:a", "192k",
+                 output_path],
+                desc="TTS 오디오 연결"
+            )
+            return output_path if success else None
+
+        except Exception as e:
+            self.logger.error(f"TTS 연결 실패: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    #  Step 5: 최종 합성 (비디오 + TTS + BGM + 자막 + 컬러 그레이딩)
+    # ------------------------------------------------------------------
+
+    def _compose_final(
+        self,
+        video_path: str,
+        tts_path: Optional[str],
+        bgm_path: Optional[str],
+        subtitle_path: Optional[str],
+        output_path: str,
+        uid: str,
+    ) -> bool:
+        """비디오 + 오디오 + 자막 최종 합성."""
+        final_args = ["-i", video_path]
+        filter_complex_parts = []
+        audio_inputs = []
+
+        # TTS 오디오
+        tts_input_idx = None
+        if tts_path and Path(tts_path).exists():
+            tts_input_idx = 1
+            final_args += ["-i", tts_path]
+            audio_inputs.append(tts_input_idx)
+
+        # BGM
+        bgm_input_idx = None
+        if bgm_path and Path(bgm_path).exists():
+            bgm_input_idx = len(audio_inputs) + 1
+            final_args += ["-i", bgm_path]
+            audio_inputs.append(bgm_input_idx)
+
+        # 오디오 믹스 필터 (TTS 볼륨 1.0 + BGM 볼륨 0.06 — 잔잔하게)
+        if tts_input_idx is not None and bgm_input_idx is not None:
+            filter_complex_parts.append(
+                f"[{tts_input_idx}:a]volume=1.0[tts];"
+                f"[{bgm_input_idx}:a]volume=0.06,afade=t=in:st=0:d=1.5,afade=t=out:st={{out_fade_st}}:d=2.0[bgm];"
+                f"[tts][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+            )
+            # out_fade_st 계산 (나중에 교체)
+            probe = _run_ffprobe(video_path)
+            vid_dur = probe.get("duration", 30.0)
+            out_fade_st = max(0, vid_dur - 2.0)
+            filter_complex_parts[0] = filter_complex_parts[0].replace(
+                "{out_fade_st}", f"{out_fade_st:.1f}"
+            )
+            audio_map = ["-map", "0:v", "-map", "[aout]"]
+        elif tts_input_idx is not None:
+            audio_map = ["-map", "0:v", "-map", f"{tts_input_idx}:a"]
+        elif bgm_input_idx is not None:
+            filter_complex_parts.append(
+                f"[{bgm_input_idx}:a]volume=0.10[bgm_only]"
+            )
+            audio_map = ["-map", "0:v", "-map", "[bgm_only]"]
+        else:
+            audio_map = ["-map", "0:v"]
+
+        # 자막 필터 (ASS burn-in)
+        video_filter = ""
+        if subtitle_path and Path(subtitle_path).exists():
+            sub_escaped = str(subtitle_path).replace("\\", "/").replace(":", "\\:")
+            video_filter = f"ass='{sub_escaped}'"
+
+        # 인코더 옵션
+        if self.encoder == "h264_nvenc":
+            enc_opts = [
+                "-c:v", self.encoder,
+                "-preset", FFMPEG_PRESET,
+                "-rc", "constqp", "-qp", FFMPEG_CRF,
+            ]
+        else:
+            enc_opts = ["-c:v", self.encoder, "-preset", "medium", "-crf", FFMPEG_CRF]
+
+        # 최종 명령 조립
+        if filter_complex_parts:
+            final_args += ["-filter_complex", ";".join(filter_complex_parts)]
+
+        if video_filter:
+            final_args += ["-vf", video_filter]
+
+        final_args += audio_map
+        final_args += enc_opts
+        final_args += [
+            "-c:a", "aac", "-b:a", "192k",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-shortest",
+            output_path,
+        ]
+
+        return _run_ffmpeg(final_args, desc="프로 숏폼 최종 렌더링", timeout=600)
+
+    # ------------------------------------------------------------------
+    #  임시 파일 정리
+    # ------------------------------------------------------------------
+
+    def _cleanup_temp_files(self, uid: str):
+        """임시 파일 정리."""
+        try:
+            patterns = [
+                f"{uid}_motion_*.mp4",
+                f"{uid}_*_mp.mp4",
+                f"{uid}_concat.mp4",
+                f"{uid}_clips.txt",
+                f"{uid}_tts_list.txt",
+                f"{uid}_tts_concat.mp3",
+                f"{uid}_silence_*.mp3",
+                f"{uid}_bgm.wav",
             ]
             for pattern in patterns:
                 for f in self.output_dir.glob(pattern):
