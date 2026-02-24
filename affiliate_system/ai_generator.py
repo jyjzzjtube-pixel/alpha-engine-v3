@@ -1806,3 +1806,177 @@ English translation:"""
         except Exception as e:
             logger.error(f"번역 실패: {e}")
             return korean_text
+
+    # ──────────────────────────────────────────────
+    # SmartMediaMatcher — 주제 분석 기반 스마트 키워드 생성
+    # ──────────────────────────────────────────────
+
+    def generate_smart_media_keywords(
+        self, product_name: str, category: str = "",
+        product_features: str = "",
+    ) -> dict:
+        """Gemini로 상품 분석 → 이미지/비디오 검색에 최적화된 키워드 생성.
+
+        Args:
+            product_name: 상품명 (예: "삼다수 2L 생수")
+            category: 카테고리 (예: "음료")
+            product_features: 상품 특징 텍스트
+
+        Returns:
+            {
+                "image_keywords_en": ["mineral water splash", ...],
+                "image_keywords_ko": ["생수 물방울", ...],
+                "video_keywords_en": ["water pouring glass slow motion", ...],
+                "video_keywords_ko": ["물 따르는 영상", ...],
+                "ai_image_prompts": ["photorealistic mineral water ...", ...],
+                "category_detected": "음료",
+                "mood": "refreshing",
+            }
+        """
+        prompt = f"""당신은 상품 마케팅 미디어 전문가입니다.
+다음 상품에 대해 고품질 이미지/영상 검색 및 AI 생성에 사용할 키워드를 생성해주세요.
+
+상품명: {product_name}
+카테고리: {category or '자동 감지'}
+특징: {product_features or '없음'}
+
+다음 JSON 형식으로만 응답하세요 (설명 없이):
+{{
+    "image_keywords_en": ["영어 이미지 검색 키워드 5개 (스톡 사이트용, 상품과 관련된 라이프스타일/분위기 이미지)"],
+    "image_keywords_ko": ["한국어 이미지 검색 키워드 3개"],
+    "video_keywords_en": ["영어 비디오 검색 키워드 4개 (세로 숏폼용, 상품 관련 B-roll)"],
+    "video_keywords_ko": ["한국어 비디오 검색 키워드 3개"],
+    "ai_image_prompts": [
+        "Gemini Imagen용 영어 프롬프트 3개 (극사실주의, 조명/카메라/렌즈 파라미터 포함, 상품과 100% 관련된 이미지)"
+    ],
+    "category_detected": "감지된 카테고리",
+    "mood": "분위기 (refreshing/luxury/cozy/trendy/energetic/professional)"
+}}
+
+AI 이미지 프롬프트 작성 규칙:
+- 반드시 영어로 작성
+- 조명: Cinematic lighting, Studio lighting, Golden hour 등 혼합
+- 카메라: Close-up, Wide angle, Depth of field, Bokeh 등
+- 렌즈: 35mm, 85mm, f/1.8, f/2.8 등
+- 화질: 8k resolution, highly detailed, photorealistic, masterpiece
+- 상품의 실제 사용 장면 또는 매력적인 연출컷 위주
+- 각 프롬프트는 서로 다른 구도/분위기 (lifestyle, product close-up, mood shot)"""
+
+        try:
+            result = self._call_gemini(
+                prompt=prompt, max_tokens=2048, temperature=0.5
+            )
+
+            # JSON 파싱
+            json_match = re.search(r'\{[\s\S]*\}', result)
+            if json_match:
+                import json
+                data = json.loads(json_match.group())
+                logger.info(
+                    f"스마트 키워드 생성: 이미지={len(data.get('image_keywords_en', []))}개, "
+                    f"비디오={len(data.get('video_keywords_en', []))}개, "
+                    f"AI프롬프트={len(data.get('ai_image_prompts', []))}개"
+                )
+                return data
+            else:
+                logger.warning("스마트 키워드 JSON 파싱 실패")
+                return self._fallback_keywords(product_name)
+
+        except Exception as e:
+            logger.error(f"스마트 키워드 생성 실패: {e}")
+            return self._fallback_keywords(product_name)
+
+    def _fallback_keywords(self, product_name: str) -> dict:
+        """Gemini 실패 시 기본 키워드 생성 (폴백)."""
+        en_name = self.translate_to_english(product_name)
+        return {
+            "image_keywords_en": [en_name, f"{en_name} lifestyle", f"{en_name} product"],
+            "image_keywords_ko": [product_name],
+            "video_keywords_en": [f"{en_name} b-roll", f"{en_name} commercial"],
+            "video_keywords_ko": [product_name],
+            "ai_image_prompts": [
+                f"Photorealistic {en_name} product shot, studio lighting, "
+                f"85mm lens f/2.8, shallow depth of field, 8k resolution, "
+                f"highly detailed, masterpiece, clean white background"
+            ],
+            "category_detected": "일반",
+            "mood": "professional",
+        }
+
+    # ──────────────────────────────────────────────
+    # Gemini Imagen 4.0 — AI 이미지 생성 (구독 내 무료)
+    # ──────────────────────────────────────────────
+
+    def generate_ai_images(
+        self, prompts: list[str], output_dir: str,
+        count_per_prompt: int = 1,
+        aspect_ratio: str = "9:16",
+    ) -> list[str]:
+        """Gemini Imagen 4.0으로 AI 이미지 생성.
+
+        Args:
+            prompts: 영어 프롬프트 리스트
+            output_dir: 이미지 저장 디렉토리
+            count_per_prompt: 프롬프트당 생성 수
+            aspect_ratio: 종횡비 (9:16 = 세로, 16:9 = 가로, 1:1 = 정사각형)
+
+        Returns:
+            생성된 이미지 파일 경로 리스트
+        """
+        from pathlib import Path
+        import base64
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        generated = []
+
+        for idx, prompt in enumerate(prompts):
+            try:
+                from google.genai import types
+
+                response = self.gemini_client.models.generate_images(
+                    model="imagen-4.0-generate-001",
+                    prompt=prompt,
+                    config=types.GenerateImagesConfig(
+                        number_of_images=count_per_prompt,
+                        aspect_ratio=aspect_ratio,
+                        safety_filter_level="BLOCK_ONLY_HIGH",
+                    ),
+                )
+
+                if response and response.generated_images:
+                    for img_idx, img in enumerate(response.generated_images):
+                        filename = f"ai_imagen_{idx}_{img_idx}_{uuid4_short()}.png"
+                        filepath = str(output_dir / filename)
+
+                        # 이미지 데이터 저장
+                        if hasattr(img, 'image') and hasattr(img.image, 'image_bytes'):
+                            with open(filepath, "wb") as f:
+                                f.write(img.image.image_bytes)
+                        elif hasattr(img, 'image_bytes'):
+                            with open(filepath, "wb") as f:
+                                f.write(img.image_bytes)
+                        else:
+                            logger.warning(f"Imagen 이미지 데이터 형식 불명: {type(img)}")
+                            continue
+
+                        if Path(filepath).exists() and Path(filepath).stat().st_size > 1000:
+                            generated.append(filepath)
+                            logger.info(f"AI 이미지 생성: {filename}")
+                        else:
+                            logger.warning(f"AI 이미지 크기 부족: {filename}")
+                else:
+                    logger.warning(f"Imagen 응답 없음 (prompt {idx+1})")
+
+            except Exception as e:
+                logger.error(f"Imagen 4.0 이미지 생성 실패 [{idx+1}]: {e}")
+                continue
+
+        logger.info(f"AI 이미지 생성 완료: {len(generated)}/{len(prompts)}장")
+        return generated
+
+
+def uuid4_short() -> str:
+    """짧은 UUID4 (8자리)."""
+    import uuid
+    return uuid.uuid4().hex[:8]
