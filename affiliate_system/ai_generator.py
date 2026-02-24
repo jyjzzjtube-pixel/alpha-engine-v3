@@ -1449,3 +1449,346 @@ English translation:"""
             max_tokens=2048,
             temperature=0.5,
         )
+
+    # ═══════════════════════════════════════════════════════════════════
+    # V2 — Coupang Partners Profit-Maximizer 콘텐츠 생성
+    # ═══════════════════════════════════════════════════════════════════
+
+    def generate_blog_content_v2(self, product: Product,
+                                  coupang_link: str = "") -> dict:
+        """V2 네이버 블로그 콘텐츠 생성 — 자연스러운 설명/추천 스타일.
+
+        내돈내산(거짓 구매후기) 절대 금지.
+        친구한테 추천하듯 자연스러운 정보 전달 톤.
+
+        Args:
+            product: 상품 정보
+            coupang_link: 쿠팡 어필리에이트 링크
+
+        Returns:
+            {"title", "intro", "body_sections":[4], "image_keywords":[5],
+             "hashtags":[7], "seo_keywords":[4], "cta_text"}
+        """
+        prompt = f"""당신은 네이버 블로그 파워블로거이자 상품 리서처입니다.
+아래 상품을 자연스럽게 소개하는 블로그 글을 작성하세요.
+
+[상품 정보]
+- 상품명: {product.title}
+- 가격: {product.price}
+- 설명: {product.description[:600] if product.description else '(정보 없음)'}
+
+[작성 규칙 — 반드시 준수]
+1. 실제로 구매해서 사용해본 척 절대 하지 마세요 (허위광고 금지)
+2. 대신 "이 제품이 요즘 인기 있는 이유", "이런 분들한테 추천" 식으로 자연스럽게 설명하세요
+3. 편한 존댓말 + 가끔 반말 섞어서 친근하게 ("근데 이거 진짜 괜찮더라고요ㅎㅎ")
+4. 이모티콘(ㅋㅋ, ㅎㅎ, 😊) 적절히 사용
+5. 총 1,500~2,000자 분량
+6. 키워드 과도한 반복 금지 — 자연스러운 문장 흐름
+7. "솔직히", "개인적으로", "확인해 보니" 같은 자연스러운 표현 사용
+
+[필수 출력 구조 — 이 형식 그대로 출력]
+[제목]
+메인키워드 + 서브키워드3개를 자연스럽게 조합한 SEO 최적화 제목 (50자 이내)
+
+[인트로]
+왜 이 상품이 요즘 주목받는지 자연스러운 도입 (2-3줄)
+
+[이미지1_키워드]
+첫 번째 이미지 검색용 영어 키워드 (예: "premium wireless earbuds close up")
+
+[본문1]
+제품 소개 — 어떤 제품인지, 주요 특징 위주로 설명 (250-350자)
+
+[이미지2_키워드]
+두 번째 이미지 검색용 영어 키워드
+
+[본문2]
+장점 + 이런 분들한테 추천 — 타겟 고객 어필 (250-350자)
+
+[이미지3_키워드]
+세 번째 이미지 검색용 영어 키워드
+
+[본문3]
+가성비 분석 + 아쉬운 점(있다면) — 단, 장점이 훨씬 크다는 결론 (250-350자)
+
+[이미지4_키워드]
+네 번째 이미지 검색용 영어 키워드
+
+[본문4]
+총평 + "아래에서 확인해 보세요!" 같은 자연스러운 구매 유도 (200-300자)
+
+[이미지5_키워드]
+다섯 번째 이미지 검색용 영어 키워드 (라이프스타일 관련)
+
+[해시태그]
+#태그1 #태그2 #태그3 #태그4 #태그5 #태그6 #태그7
+
+[SEO키워드]
+메인키워드, 서브1, 서브2, 서브3"""
+
+        try:
+            raw = self._call_with_fallback(
+                primary_fn=self._call_gemini,
+                fallback_fn=lambda p, **kw: self._call_claude(
+                    model=CLAUDE_HAIKU, prompt=p, **kw),
+                prompt=prompt,
+                max_tokens=4096,
+                temperature=0.8,
+            )
+            return self._parse_blog_v2_response(raw, coupang_link)
+        except Exception as e:
+            logger.error(f"V2 블로그 콘텐츠 생성 실패: {e}")
+            return self._fallback_blog_content(product, coupang_link)
+
+    def _parse_blog_v2_response(self, raw: str, coupang_link: str = "") -> dict:
+        """V2 블로그 AI 응답 파싱 → 구조화된 dict."""
+        result = {
+            "title": "",
+            "intro": "",
+            "body_sections": [],
+            "image_keywords": [],
+            "hashtags": [],
+            "seo_keywords": [],
+            "cta_text": "지금 최저가로 확인해 보세요!",
+            "coupang_link": coupang_link,
+        }
+
+        try:
+            # 섹션별 파싱
+            sections = {
+                "제목": "title",
+                "인트로": "intro",
+            }
+
+            for label, key in sections.items():
+                pattern = rf'\[{label}\]\s*\n(.+?)(?=\n\[|\Z)'
+                match = re.search(pattern, raw, re.DOTALL)
+                if match:
+                    result[key] = match.group(1).strip()
+
+            # 본문 1~4 파싱
+            for i in range(1, 5):
+                pattern = rf'\[본문{i}\]\s*\n(.+?)(?=\n\[|\Z)'
+                match = re.search(pattern, raw, re.DOTALL)
+                if match:
+                    result["body_sections"].append(match.group(1).strip())
+
+            # 이미지 키워드 1~5 파싱
+            for i in range(1, 6):
+                pattern = rf'\[이미지{i}_키워드\]\s*\n(.+?)(?=\n\[|\Z)'
+                match = re.search(pattern, raw, re.DOTALL)
+                if match:
+                    result["image_keywords"].append(match.group(1).strip())
+
+            # 해시태그 파싱
+            ht_match = re.search(r'\[해시태그\]\s*\n(.+?)(?=\n\[|\Z)', raw, re.DOTALL)
+            if ht_match:
+                ht_text = ht_match.group(1).strip()
+                result["hashtags"] = [
+                    t.strip().lstrip('#') for t in re.findall(r'#\S+', ht_text)
+                ]
+
+            # SEO 키워드 파싱
+            seo_match = re.search(r'\[SEO키워드\]\s*\n(.+?)(?=\n\[|\Z)', raw, re.DOTALL)
+            if seo_match:
+                seo_text = seo_match.group(1).strip()
+                result["seo_keywords"] = [
+                    k.strip() for k in re.split(r'[,，]', seo_text) if k.strip()
+                ]
+
+            # 마크다운 문법 제거
+            for key in ["title", "intro"]:
+                result[key] = re.sub(r'^[#*]+\s*', '', result[key])
+            result["body_sections"] = [
+                re.sub(r'^[#*]+\s*', '', s) for s in result["body_sections"]
+            ]
+
+            logger.info(
+                f"V2 블로그 파싱: 제목={result['title'][:30]}, "
+                f"본문={len(result['body_sections'])}섹션, "
+                f"이미지KW={len(result['image_keywords'])}개"
+            )
+            return result
+
+        except Exception as e:
+            logger.error(f"V2 블로그 파싱 실패: {e}")
+            return result
+
+    def _fallback_blog_content(self, product: Product,
+                                coupang_link: str = "") -> dict:
+        """AI 실패 시 폴백 블로그 콘텐츠."""
+        title = f"{product.title} — 요즘 핫한 이유 정리"
+        return {
+            "title": title,
+            "intro": f"요즘 {product.title}이(가) 많은 관심을 받고 있어요. 왜 인기인지 한번 살펴볼게요!",
+            "body_sections": [
+                f"{product.title}은(는) {product.price} 가격대의 제품이에요. 기본적인 특징을 살펴보면 꽤 괜찮은 스펙을 갖추고 있어요.",
+                "이런 분들한테 특히 추천할 만해요. 가성비를 중시하시는 분, 실용적인 제품을 찾으시는 분들이요.",
+                "가격 대비 성능을 따져보면 충분히 만족스러운 수준이에요. 아쉬운 점이 있다면 배송이 조금 걸릴 수 있다는 정도?",
+                "전체적으로 괜찮은 제품이에요! 궁금하신 분들은 아래에서 확인해 보세요 :)",
+            ],
+            "image_keywords": [
+                f"{product.title} product photo",
+                f"{product.title} detail close up",
+                f"{product.title} lifestyle usage",
+                f"{product.title} package unboxing",
+                "happy customer using product",
+            ],
+            "hashtags": ["추천템", "가성비", "인기상품", "꿀템", "쇼핑추천", "생활용품", "쿠팡추천"],
+            "seo_keywords": [product.title, "추천", "후기", "가성비"],
+            "cta_text": "지금 최저가로 확인해 보세요!",
+            "coupang_link": coupang_link,
+        }
+
+    def generate_shorts_hooking_script(
+        self, product: Product, persona: str = "",
+        coupang_link: str = "", dm_keyword: str = "링크",
+    ) -> list[dict]:
+        """V2 숏폼 전용 후킹 대본 생성 (블로그와 완전 별도).
+
+        유튜브 쇼츠/인스타 릴스에 최적화된 짧고 강렬한 대본.
+        각 장면에 감정 태그(emotion) 포함.
+
+        Args:
+            product: 상품 정보
+            persona: 페르소나 (옵션)
+            coupang_link: 쿠팡 링크
+            dm_keyword: DM 유도 키워드
+
+        Returns:
+            [{"scene_num": 1, "text": "...", "duration": 2.0, "emotion": "excited"}, ...]
+        """
+        prompt = f"""당신은 유튜브 쇼츠/인스타 릴스 전문 크리에이터입니다.
+아래 상품에 대한 숏폼 영상 대본을 작성하세요.
+
+[상품 정보]
+- 상품명: {product.title}
+- 가격: {product.price}
+- 설명: {product.description[:400] if product.description else '(없음)'}
+
+[대본 작성 규칙 — 반드시 준수]
+1. 총 5~6장면, 전체 40~55초 분량
+2. 첫 장면(1-2초)은 무조건 후킹! "이거 모르면 손해", "와 이거 실화?" 스타일
+3. 트렌디한 유튜브 쇼츠 톤 — 에너지 넘치고 빠르게
+4. 각 장면에 반드시 감정 태그 포함: excited/friendly/urgent/dramatic/calm/hyped
+5. 마지막 장면에 DM 유도 문구 포함: "[{dm_keyword}]를 댓글로 남겨주시면 구매 링크를 DM으로 즉시 보내드립니다!"
+6. 블로그 본문 재사용 절대 금지 — 숏폼 전용 짧고 임팩트 있는 문장만
+7. 각 장면 자막은 15~25자 이내로 짧게
+
+[출력 형식 — 정확히 이 형식 준수]
+[장면1]
+텍스트: (자막 텍스트)
+길이: (초 단위, 예: 2.0)
+감정: (excited/friendly/urgent/dramatic/calm/hyped)
+
+[장면2]
+텍스트: (자막 텍스트)
+길이: (초 단위)
+감정: (태그)
+
+... (5~6개 장면)"""
+
+        try:
+            raw = self._call_with_fallback(
+                primary_fn=self._call_gemini,
+                fallback_fn=lambda p, **kw: self._call_claude(
+                    model=CLAUDE_HAIKU, prompt=p, **kw),
+                prompt=prompt,
+                max_tokens=2048,
+                temperature=0.9,
+            )
+            scenes = self._parse_shorts_script(raw, dm_keyword)
+
+            # 최소 5장면 보장
+            if len(scenes) < 5:
+                scenes = self._fallback_shorts_script(product, dm_keyword)
+
+            logger.info(f"숏폼 대본 생성: {len(scenes)}장면")
+            return scenes
+
+        except Exception as e:
+            logger.error(f"숏폼 대본 생성 실패: {e}")
+            return self._fallback_shorts_script(product, dm_keyword)
+
+    def _parse_shorts_script(self, raw: str,
+                              dm_keyword: str = "링크") -> list[dict]:
+        """숏폼 대본 AI 응답 파싱."""
+        scenes = []
+        valid_emotions = {"excited", "friendly", "urgent", "dramatic", "calm", "hyped"}
+
+        try:
+            # [장면N] 블록 파싱
+            blocks = re.findall(
+                r'\[장면(\d+)\]\s*\n(.+?)(?=\n\[장면|\Z)',
+                raw, re.DOTALL
+            )
+
+            for scene_num_str, block in blocks:
+                scene_num = int(scene_num_str)
+
+                # 텍스트 추출
+                text_match = re.search(r'텍스트:\s*(.+)', block)
+                text = text_match.group(1).strip() if text_match else ""
+
+                # 길이 추출
+                dur_match = re.search(r'길이:\s*([\d.]+)', block)
+                duration = float(dur_match.group(1)) if dur_match else 3.0
+
+                # 감정 추출
+                emo_match = re.search(r'감정:\s*(\w+)', block)
+                emotion = emo_match.group(1).lower() if emo_match else "friendly"
+                if emotion not in valid_emotions:
+                    emotion = "friendly"
+
+                if text:
+                    scenes.append({
+                        "scene_num": scene_num,
+                        "text": text,
+                        "duration": min(max(duration, 1.5), 12.0),
+                        "emotion": emotion,
+                    })
+
+        except Exception as e:
+            logger.error(f"숏폼 대본 파싱 에러: {e}")
+
+        return scenes
+
+    def _fallback_shorts_script(self, product: Product,
+                                 dm_keyword: str = "링크") -> list[dict]:
+        """대본 생성 실패 시 폴백 스크립트."""
+        return [
+            {"scene_num": 1, "text": "이거 아직도 모르면 손해예요!", "duration": 2.5, "emotion": "excited"},
+            {"scene_num": 2, "text": f"{product.title[:15]} 찐템 발견", "duration": 3.0, "emotion": "hyped"},
+            {"scene_num": 3, "text": f"가격이 {product.price}인데 이 퀄리티?", "duration": 3.5, "emotion": "friendly"},
+            {"scene_num": 4, "text": "이 가격 진짜 실화인가요", "duration": 3.0, "emotion": "dramatic"},
+            {"scene_num": 5, "text": f"[{dm_keyword}] 댓글 달면 링크 보내드려요!", "duration": 4.0, "emotion": "urgent"},
+        ]
+
+    def translate_for_search(self, korean_text: str) -> str:
+        """상품명/키워드를 영어 검색어로 변환 (Gemini 무료).
+
+        Args:
+            korean_text: 한국어 상품명 또는 키워드
+
+        Returns:
+            영어 검색 키워드
+        """
+        prompt = f"""다음 한국어 상품명/키워드를 영어 검색 키워드로 변환해주세요.
+검색엔진에서 관련 이미지/영상을 찾을 수 있는 핵심 키워드만 2-4단어로 짧게 작성하세요.
+
+한국어: {korean_text}
+
+영어 검색 키워드:"""
+
+        try:
+            result = self._call_gemini(
+                prompt=prompt, max_tokens=100, temperature=0.3
+            )
+            # 깔끔하게 정리
+            result = result.strip().strip('"').strip("'")
+            result = re.sub(r'[^\w\s-]', '', result).strip()
+            logger.info(f"번역: '{korean_text}' → '{result}'")
+            return result if result else korean_text
+        except Exception as e:
+            logger.error(f"번역 실패: {e}")
+            return korean_text

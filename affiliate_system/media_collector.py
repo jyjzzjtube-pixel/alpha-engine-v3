@@ -779,6 +779,575 @@ class MediaCollector:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# V2 — Anti-Ban + 옴니 소스 크롤링 확장
+# ═══════════════════════════════════════════════════════════════════════════
+
+import json as _json
+import random as _random
+import time as _time
+
+# ── Anti-Ban: Random User-Agent Pool ──
+_V2_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1",
+]
+
+def _get_random_ua() -> str:
+    """랜덤 User-Agent 반환."""
+    try:
+        from fake_useragent import UserAgent
+        return UserAgent().random
+    except ImportError:
+        return _random.choice(_V2_USER_AGENTS)
+
+
+def _get_v2_session() -> requests.Session:
+    """Anti-Ban 세팅된 requests 세션 생성.
+
+    - Random User-Agent
+    - 쿠키 로드 (cookies.txt)
+    - 프록시 설정
+    """
+    from affiliate_system.config import (
+        PROXY_URL, COOKIES_TXT_PATH, CRAWL_MIN_DELAY, CRAWL_MAX_DELAY
+    )
+
+    session = requests.Session()
+
+    # Random User-Agent
+    session.headers.update({
+        "User-Agent": _get_random_ua(),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    })
+
+    # 쿠키 로드
+    if os.path.exists(COOKIES_TXT_PATH):
+        try:
+            from http.cookiejar import MozillaCookieJar
+            cj = MozillaCookieJar(COOKIES_TXT_PATH)
+            cj.load(ignore_discard=True, ignore_expires=True)
+            session.cookies.update(cj)
+        except Exception:
+            pass  # 쿠키 로드 실패해도 계속 진행
+
+    # 프록시 설정
+    if PROXY_URL:
+        session.proxies = {
+            "http": PROXY_URL,
+            "https": PROXY_URL,
+        }
+
+    return session
+
+
+def _anti_ban_delay():
+    """크롤링 요청 간 Anti-Ban 딜레이."""
+    from affiliate_system.config import CRAWL_MIN_DELAY, CRAWL_MAX_DELAY
+    delay = _random.uniform(CRAWL_MIN_DELAY, CRAWL_MAX_DELAY)
+    _time.sleep(delay)
+
+
+class OmniMediaCollector:
+    """V2 옴니 소스 미디어 수집기.
+
+    Anti-Ban: Random UA + Cookies.txt + Proxy 세팅.
+    이미지: Google/Pinterest/Pexels/Unsplash
+    영상: TikTok/Instagram/YouTube CC/Pexels/Pixabay (세로 전용)
+    SFX: Mixkit 크롤링
+    """
+
+    def __init__(self):
+        """옴니 수집기 초기화."""
+        from affiliate_system.config import (
+            V2_BLOG_DIR, V2_SHORTS_DIR, V2_SFX_DIR, CRAWL_MAX_RETRIES
+        )
+        self.logger = setup_logger("omni_collector", "omni_collector.log")
+        self.session = _get_v2_session()
+        self.blog_dir = ensure_dir(V2_BLOG_DIR)
+        self.shorts_dir = ensure_dir(V2_SHORTS_DIR / "sources")
+        self.sfx_dir = ensure_dir(V2_SFX_DIR)
+        self.max_retries = CRAWL_MAX_RETRIES
+
+        # 기존 MediaCollector 재사용
+        self._base = MediaCollector()
+
+    # ── 이미지 소싱 (블로그용) ──
+
+    def collect_blog_images(
+        self, product_title: str, image_keywords: list[str],
+        product_image_urls: list[str] = None, count: int = 5,
+    ) -> list[str]:
+        """블로그용 고품질 이미지 수집 (우선순위 기반).
+
+        우선순위: 상품 자체 이미지 → Pexels → Unsplash → Pixabay
+        최소 5장, 최대 7장 보장.
+
+        Args:
+            product_title: 상품명
+            image_keywords: AI가 생성한 이미지 검색 키워드 (영어)
+            product_image_urls: 상품 자체 이미지 URL 리스트
+            count: 목표 이미지 수
+
+        Returns:
+            다운로드된 이미지 경로 리스트
+        """
+        collected = []
+        product_image_urls = product_image_urls or []
+
+        # 1순위: 상품 자체 이미지
+        for url in product_image_urls[:2]:
+            try:
+                path = self._download_image_v2(url, "product")
+                if path:
+                    collected.append(path)
+            except Exception as e:
+                self.logger.warning(f"상품 이미지 다운로드 실패: {e}")
+
+        # 2순위: 키워드별 스톡 이미지 검색
+        for kw in image_keywords:
+            if len(collected) >= count:
+                break
+
+            try:
+                # Pexels 우선
+                results = self._base.search_pexels_images(kw, count=2)
+                for item in results[:1]:
+                    if len(collected) >= count:
+                        break
+                    path = self._download_image_v2(item.get("url", ""), "pexels")
+                    if path:
+                        collected.append(path)
+
+                _anti_ban_delay()
+
+                # Unsplash 보조
+                if len(collected) < count:
+                    results = self._base.search_unsplash_images(kw, count=2)
+                    for item in results[:1]:
+                        if len(collected) >= count:
+                            break
+                        path = self._download_image_v2(item.get("url", ""), "unsplash")
+                        if path:
+                            collected.append(path)
+
+            except Exception as e:
+                self.logger.warning(f"이미지 검색 실패 (kw={kw}): {e}")
+
+        # 부족하면 Pixabay 폴백
+        if len(collected) < count:
+            try:
+                results = self._base.search_images(
+                    product_title, count=count - len(collected), source="pixabay"
+                )
+                for item in results:
+                    if len(collected) >= count:
+                        break
+                    path = self._download_image_v2(item.get("url", ""), "pixabay")
+                    if path:
+                        collected.append(path)
+            except Exception as e:
+                self.logger.warning(f"Pixabay 폴백 실패: {e}")
+
+        self.logger.info(f"블로그 이미지 수집 완료: {len(collected)}/{count}장")
+        return collected
+
+    def _download_image_v2(self, url: str, source: str) -> Optional[str]:
+        """Anti-Ban 세션으로 이미지 다운로드."""
+        if not url:
+            return None
+
+        try:
+            filename = f"blog_{source}_{uuid.uuid4().hex[:8]}.jpg"
+            save_path = str(self.blog_dir / filename)
+
+            resp = self.session.get(url, timeout=30, stream=True)
+            resp.raise_for_status()
+
+            with open(save_path, "wb") as f:
+                for chunk in resp.iter_content(8192):
+                    f.write(chunk)
+
+            # 최소 크기 검증
+            if os.path.getsize(save_path) < _MIN_IMAGE_SIZE:
+                os.remove(save_path)
+                return None
+
+            # PIL 검증 + 리사이즈
+            from affiliate_system.config import BLOG_IMAGE_RESIZE_WIDTH
+            img = Image.open(save_path).convert("RGB")
+            w, h = img.size
+
+            if w < 400 or h < 300:
+                os.remove(save_path)
+                return None
+
+            # 블로그 가로폭 리사이즈
+            if w > BLOG_IMAGE_RESIZE_WIDTH:
+                ratio = BLOG_IMAGE_RESIZE_WIDTH / w
+                new_h = int(h * ratio)
+                img = img.resize((BLOG_IMAGE_RESIZE_WIDTH, new_h), Image.LANCZOS)
+
+            img.save(save_path, "JPEG", quality=92)
+            return save_path
+
+        except Exception as e:
+            self.logger.warning(f"이미지 다운로드 실패 ({source}): {e}")
+            return None
+
+    # ── 비디오 소싱 (숏폼용) ──
+
+    def collect_video_sources(
+        self, product_title: str, search_keyword_en: str,
+        count: int = 6,
+    ) -> list[dict]:
+        """옴니 소스 비디오 수집 (세로 영상 우선).
+
+        우선순위: Pexels Portrait > YouTube CC > TikTok
+        각 소스에서 다운로드 + 메타데이터 반환.
+
+        Args:
+            product_title: 상품명 (한국어)
+            search_keyword_en: 영어 검색 키워드
+            count: 목표 비디오 수
+
+        Returns:
+            [{"path", "source", "duration", "license"}, ...]
+        """
+        collected = []
+
+        # 1순위: Pexels 세로 영상
+        try:
+            pexels_vids = self._search_pexels_portrait_videos(search_keyword_en, count=3)
+            for vid in pexels_vids:
+                if len(collected) >= count:
+                    break
+                path = self._download_video_v2(vid["url"], "pexels")
+                if path:
+                    collected.append({
+                        "path": path,
+                        "source": "pexels_stock",
+                        "duration": vid.get("duration", 0),
+                        "license": "free_commercial",
+                    })
+            _anti_ban_delay()
+        except Exception as e:
+            self.logger.warning(f"Pexels 비디오 검색 실패: {e}")
+
+        # 2순위: Pixabay 세로 영상
+        if len(collected) < count:
+            try:
+                pixabay_vids = self._search_pixabay_portrait_videos(search_keyword_en, count=3)
+                for vid in pixabay_vids:
+                    if len(collected) >= count:
+                        break
+                    path = self._download_video_v2(vid["url"], "pixabay")
+                    if path:
+                        collected.append({
+                            "path": path,
+                            "source": "pixabay_stock",
+                            "duration": vid.get("duration", 0),
+                            "license": "free_commercial",
+                        })
+                _anti_ban_delay()
+            except Exception as e:
+                self.logger.warning(f"Pixabay 비디오 검색 실패: {e}")
+
+        # 3순위: YouTube Creative Commons
+        if len(collected) < count:
+            try:
+                yt_vids = self._search_youtube_cc(search_keyword_en, count=3)
+                for vid in yt_vids:
+                    if len(collected) >= count:
+                        break
+                    path = self._download_yt_dlp(vid["url"], "youtube_cc")
+                    if path:
+                        collected.append({
+                            "path": path,
+                            "source": "youtube_cc",
+                            "duration": vid.get("duration", 0),
+                            "license": "creative_commons",
+                        })
+                _anti_ban_delay()
+            except Exception as e:
+                self.logger.warning(f"YouTube CC 검색 실패: {e}")
+
+        self.logger.info(f"비디오 수집 완료: {len(collected)}/{count}개")
+        return collected
+
+    def _search_pexels_portrait_videos(
+        self, query: str, count: int = 3
+    ) -> list[dict]:
+        """Pexels Videos API — 세로(Portrait) 영상만 필터."""
+        if not PEXELS_API_KEY:
+            return []
+
+        try:
+            resp = self.session.get(
+                "https://api.pexels.com/videos/search",
+                params={"query": query, "per_page": count * 3, "orientation": "portrait"},
+                headers={"Authorization": PEXELS_API_KEY},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            results = []
+            for video in data.get("videos", []):
+                # 세로(9:16) 영상 필터
+                w = video.get("width", 0)
+                h = video.get("height", 0)
+                if h > w:  # 세로 영상
+                    # 최고 화질 파일 URL
+                    files = video.get("video_files", [])
+                    best = max(files, key=lambda f: f.get("width", 0), default=None)
+                    if best:
+                        results.append({
+                            "url": best["link"],
+                            "duration": video.get("duration", 0),
+                            "width": best.get("width", 0),
+                            "height": best.get("height", 0),
+                        })
+
+                if len(results) >= count:
+                    break
+
+            self.logger.info(f"Pexels Portrait: {len(results)}개 발견")
+            return results
+
+        except Exception as e:
+            self.logger.error(f"Pexels Videos API 에러: {e}")
+            return []
+
+    def _search_pixabay_portrait_videos(
+        self, query: str, count: int = 3
+    ) -> list[dict]:
+        """Pixabay Videos API — 세로 영상 필터."""
+        if not PIXABAY_API_KEY:
+            return []
+
+        try:
+            resp = self.session.get(
+                "https://pixabay.com/api/videos/",
+                params={
+                    "key": PIXABAY_API_KEY,
+                    "q": query,
+                    "per_page": count * 3,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            results = []
+            for hit in data.get("hits", []):
+                videos = hit.get("videos", {})
+                # medium 또는 large 화질
+                for quality in ["large", "medium"]:
+                    vdata = videos.get(quality, {})
+                    if vdata.get("url"):
+                        w = vdata.get("width", 0)
+                        h = vdata.get("height", 0)
+                        if h > w:  # 세로
+                            results.append({
+                                "url": vdata["url"],
+                                "duration": hit.get("duration", 0),
+                                "width": w,
+                                "height": h,
+                            })
+                            break
+
+                if len(results) >= count:
+                    break
+
+            self.logger.info(f"Pixabay Portrait: {len(results)}개 발견")
+            return results
+
+        except Exception as e:
+            self.logger.error(f"Pixabay Videos API 에러: {e}")
+            return []
+
+    def _search_youtube_cc(
+        self, query: str, count: int = 3
+    ) -> list[dict]:
+        """YouTube Data API — Creative Commons 필터 ONLY."""
+        try:
+            from googleapiclient.discovery import build
+
+            youtube = build("youtube", "v3", developerKey=os.getenv("YOUTUBE_API_KEY", ""))
+            req = youtube.search().list(
+                part="snippet",
+                q=query + " shorts vertical",
+                type="video",
+                videoLicense="creativeCommon",  # CC 필터 필수!
+                videoDuration="short",
+                maxResults=count * 2,
+                order="relevance",
+            )
+            resp = req.execute()
+
+            results = []
+            for item in resp.get("items", []):
+                vid_id = item["id"].get("videoId", "")
+                if vid_id:
+                    results.append({
+                        "url": f"https://www.youtube.com/watch?v={vid_id}",
+                        "title": item["snippet"].get("title", ""),
+                        "duration": 0,  # API에서는 별도 호출 필요
+                    })
+
+                if len(results) >= count:
+                    break
+
+            self.logger.info(f"YouTube CC: {len(results)}개 발견")
+            return results
+
+        except Exception as e:
+            self.logger.warning(f"YouTube CC 검색 실패 (API 키 확인): {e}")
+            return []
+
+    def _download_video_v2(self, url: str, source: str) -> Optional[str]:
+        """Anti-Ban 세션으로 비디오 직접 다운로드 (스톡 사이트용)."""
+        if not url:
+            return None
+
+        try:
+            filename = f"vid_{source}_{uuid.uuid4().hex[:8]}.mp4"
+            save_path = str(self.shorts_dir / filename)
+
+            resp = self.session.get(url, timeout=60, stream=True)
+            resp.raise_for_status()
+
+            downloaded = 0
+            with open(save_path, "wb") as f:
+                for chunk in resp.iter_content(8192):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+
+            if downloaded < 50_000:  # 50KB 미만은 무효
+                os.remove(save_path)
+                return None
+
+            self.logger.info(f"비디오 다운로드: {source}, {downloaded/1024/1024:.1f}MB")
+            return save_path
+
+        except Exception as e:
+            self.logger.warning(f"비디오 다운로드 실패 ({source}): {e}")
+            return None
+
+    def _download_yt_dlp(self, url: str, source: str) -> Optional[str]:
+        """yt-dlp로 영상 다운로드 (Anti-Ban 옵션 포함)."""
+        from affiliate_system.config import COOKIES_TXT_PATH
+
+        try:
+            filename = f"vid_{source}_{uuid.uuid4().hex[:8]}.mp4"
+            save_path = str(self.shorts_dir / filename)
+
+            ytdlp = self._base._find_ytdlp()
+
+            cmd = [
+                ytdlp,
+                "-f", "bestvideo[height<=1920][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "--merge-output-format", "mp4",
+                "-o", save_path,
+                "--no-playlist",
+                "--quiet",
+                "--no-warnings",
+                "--user-agent", _get_random_ua(),
+            ]
+
+            # 쿠키 파일 추가
+            if os.path.exists(COOKIES_TXT_PATH):
+                cmd += ["--cookies", COOKIES_TXT_PATH]
+
+            cmd.append(url)
+
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120,
+                encoding='utf-8', errors='replace'
+            )
+
+            if result.returncode == 0 and os.path.exists(save_path):
+                size = os.path.getsize(save_path)
+                self.logger.info(f"yt-dlp 다운로드 성공: {source}, {size/1024/1024:.1f}MB")
+                return save_path
+            else:
+                self.logger.warning(f"yt-dlp 실패: {result.stderr[:200]}")
+                return None
+
+        except Exception as e:
+            self.logger.warning(f"yt-dlp 다운로드 에러: {e}")
+            return None
+
+    # ── SFX 크롤링 ──
+
+    def crawl_mixkit_sfx(self, keyword: str = "transition", count: int = 3) -> list[str]:
+        """Mixkit.co에서 무료 SFX 효과음 크롤링.
+
+        Args:
+            keyword: 검색 키워드 (예: "transition", "whoosh", "notification")
+            count: 다운로드할 SFX 수
+
+        Returns:
+            다운로드된 SFX 파일 경로 리스트
+        """
+        results = []
+
+        try:
+            from bs4 import BeautifulSoup
+
+            search_url = f"https://mixkit.co/free-sound-effects/{keyword}/"
+            resp = self.session.get(search_url, timeout=20)
+            resp.raise_for_status()
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Mixkit의 오디오 프리뷰 URL 추출
+            audio_tags = soup.find_all("audio", limit=count * 2)
+            for audio in audio_tags:
+                source = audio.find("source")
+                if source and source.get("src"):
+                    audio_url = source["src"]
+                    if not audio_url.startswith("http"):
+                        audio_url = "https://mixkit.co" + audio_url
+
+                    try:
+                        filename = f"sfx_{keyword}_{uuid.uuid4().hex[:6]}.mp3"
+                        save_path = str(self.sfx_dir / filename)
+
+                        audio_resp = self.session.get(audio_url, timeout=15)
+                        audio_resp.raise_for_status()
+
+                        with open(save_path, "wb") as f:
+                            f.write(audio_resp.content)
+
+                        if os.path.getsize(save_path) > 5000:
+                            results.append(save_path)
+
+                        if len(results) >= count:
+                            break
+
+                    except Exception as e:
+                        self.logger.warning(f"SFX 다운로드 실패: {e}")
+
+                _anti_ban_delay()
+
+        except Exception as e:
+            self.logger.warning(f"Mixkit 크롤링 실패: {e}")
+
+        self.logger.info(f"SFX 수집: {len(results)}/{count}개")
+        return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CLI 진입점 (테스트용)
 # ═══════════════════════════════════════════════════════════════════════════
 

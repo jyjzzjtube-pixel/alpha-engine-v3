@@ -426,3 +426,166 @@ class Campaign:
     persona: str = ""
     hook_directive: str = ""
     error_message: str = ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# V2 — Coupang Partners Profit-Maximizer 확장 모델
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ContentMode(Enum):
+    """V2 콘텐츠 생성 모드"""
+    BLOG_ONLY   = "blog_only"       # 네이버 블로그만
+    SHORTS_ONLY = "shorts_only"     # 숏폼 영상만 (유튜브/인스타/틱톡)
+    FULL_V2     = "full_v2"         # 블로그 + 숏폼 동시 (기본)
+
+
+class PipelineStateV2(Enum):
+    """V2 대화형 파이프라인 상태"""
+    IDLE              = "idle"
+    AWAITING_LINK     = "awaiting_link"       # Step 1: 쿠팡 링크 대기
+    ANALYZING         = "analyzing"            # Step 2: 링크 분석 중
+    AWAITING_CONFIRM  = "awaiting_confirm"     # Step 2: 사용자 확인 대기
+    EXECUTING         = "executing"            # Steps 3-10: 풀 실행 중
+    PAUSED            = "paused"               # 사용자 확인 대기 (input)
+    COMPLETE          = "complete"
+    ERROR             = "error"
+
+
+class EmotionTag(Enum):
+    """숏폼 대본 장면별 감정 태그"""
+    EXCITED   = "excited"     # 흥분/놀람 — rate:+20%, pitch:+5Hz
+    FRIENDLY  = "friendly"    # 친근/설명 — rate:+5%, pitch:0
+    URGENT    = "urgent"      # 긴급/강조 — rate:+25%, pitch:+3Hz
+    DRAMATIC  = "dramatic"    # 드라마틱 — rate:-5%, pitch:-2Hz
+    CALM      = "calm"        # 차분/신뢰 — rate:0%, pitch:0
+    HYPED     = "hyped"       # 최고조 흥분 — rate:+30%, pitch:+8Hz
+
+
+class VideoSource(Enum):
+    """비디오 소스 유형"""
+    PEXELS_STOCK    = "pexels_stock"      # Pexels 무료 스톡 영상
+    PIXABAY_STOCK   = "pixabay_stock"     # Pixabay 무료 스톡 영상
+    YOUTUBE_CC      = "youtube_cc"        # YouTube Creative Commons
+    TIKTOK          = "tiktok"            # TikTok 크롤링
+    INSTAGRAM       = "instagram"         # Instagram 크롤링
+    AI_GENERATED    = "ai_generated"      # AI 생성 (Veo 3.1 등)
+    PLACEHOLDER     = "placeholder"       # 플레이스홀더 (사용자 수동)
+
+
+class ImageSource(Enum):
+    """이미지 소스 유형"""
+    PRODUCT_OWN     = "product_own"       # 상품 자체 이미지
+    PEXELS          = "pexels"
+    PIXABAY         = "pixabay"
+    UNSPLASH        = "unsplash"
+    GOOGLE          = "google"
+    PINTEREST       = "pinterest"
+
+
+# ── V2 데이터클래스 ──
+
+@dataclass
+class BlogContent:
+    """V2 네이버 블로그 콘텐츠 — 자연스러운 설명/추천 스타일"""
+    title: str = ""                                          # SEO 최적화 제목
+    intro: str = ""                                          # 도입부 (2-3줄)
+    body_sections: list[str] = field(default_factory=list)   # 본문 4개 섹션
+    image_keywords: list[str] = field(default_factory=list)  # 이미지 검색 키워드 5개 (영어)
+    image_paths: list[str] = field(default_factory=list)     # 다운로드된 이미지 경로
+    hashtags: list[str] = field(default_factory=list)        # 해시태그 5-7개
+    seo_keywords: list[str] = field(default_factory=list)    # 메인+서브 키워드 4개
+    cta_text: str = ""                                       # 구매 유도 텍스트
+    coupang_link: str = ""                                   # 쿠팡 어필리에이트 링크
+    disclaimer: str = ("이 포스팅은 쿠팡 파트너스 활동의 일환으로, "
+                       "이에 따른 일정액의 수수료를 제공받습니다.")
+    blog_html: str = ""                                      # 최종 생성된 HTML
+
+
+@dataclass
+class ShortsScene:
+    """숏폼 영상 1개 장면 데이터"""
+    scene_num: int = 0
+    text: str = ""                    # 자막/대본 텍스트
+    duration: float = 3.0             # 장면 길이 (초)
+    emotion: EmotionTag = EmotionTag.FRIENDLY  # 감정 태그
+    tts_path: str = ""                # TTS 음성 파일 경로
+    tts_duration: float = 0.0         # 실제 TTS 재생 시간
+    video_clip_path: str = ""         # 배경 영상 클립 경로
+    word_timestamps: list[dict] = field(default_factory=list)  # Whisper 단어 타임스탬프
+
+
+@dataclass
+class ShortsContent:
+    """V2 숏폼 콘텐츠 (세탁 영상 기반)"""
+    scenes: list[ShortsScene] = field(default_factory=list)  # 5-7개 장면
+    source_videos: list[dict] = field(default_factory=list)  # 크롤링 원본 [{path, source, duration, license}]
+    laundered_videos: list[str] = field(default_factory=list) # 4단계 세탁 완료 영상
+    sfx_paths: list[str] = field(default_factory=list)       # Mixkit SFX 경로
+    bgm_path: str = ""                                       # BGM 경로
+    final_video_path: str = ""                               # 최종 렌더링 영상
+    subtitle_path: str = ""                                  # ASS 자막 파일 경로
+    dm_prompt_keyword: str = ""                              # DM 유도 키워드
+    copyright_notice: str = ""                               # 저작권 방어 문구
+    coupang_link: str = ""                                   # 쿠팡 어필리에이트 링크
+
+
+@dataclass
+class PlaceholderItem:
+    """AI 생성 필요 플레이스홀더"""
+    media_type: str = "image"         # "image" 또는 "video"
+    context: str = ""                 # 설명 (무엇이 필요한지)
+    folder_path: str = ""             # 파일을 넣어야 할 폴더
+    specs: dict = field(default_factory=dict)  # {width, height, format} 또는 {duration, resolution}
+    message: str = ""                 # 사용자에게 보여줄 메시지
+    filled: bool = False              # 채워졌는지 여부
+
+
+@dataclass
+class V2CampaignConfig:
+    """V2 캠페인 설정"""
+    mode: ContentMode = ContentMode.FULL_V2
+    coupang_link: str = ""
+    blog_enabled: bool = True         # 네이버 블로그 생성
+    shorts_enabled: bool = True       # 숏폼 영상 생성
+    youtube_enabled: bool = True      # YouTube Shorts 업로드
+    instagram_enabled: bool = True    # Instagram Reels 업로드
+    naver_upload: bool = True         # 네이버 블로그 업로드
+    dm_automation: bool = True        # DM 유도 문구 삽입
+    copyright_defense: bool = True    # 저작권 방어 문구 삽입
+    placeholder_enabled: bool = True  # 플레이스홀더 활성화
+    drive_archive: bool = True        # Google Drive 아카이빙
+    brand: str = ""
+    persona: str = ""
+    user_email: str = ""              # 저작권 방어용 이메일
+
+
+@dataclass
+class V2Campaign:
+    """V2 캠페인 전체 데이터"""
+    id: str = ""
+    config: V2CampaignConfig = field(default_factory=V2CampaignConfig)
+    product: Product = field(default_factory=Product)
+    state: PipelineStateV2 = PipelineStateV2.IDLE
+
+    # V2 콘텐츠
+    blog_content: BlogContent = field(default_factory=BlogContent)
+    shorts_content: ShortsContent = field(default_factory=ShortsContent)
+    placeholders: list[PlaceholderItem] = field(default_factory=list)
+
+    # 렌더링 결과
+    platform_videos: dict[str, str] = field(default_factory=dict)    # {platform: video_path}
+    platform_thumbnails: dict[str, str] = field(default_factory=dict) # {platform: thumb_path}
+
+    # 업로드 결과
+    upload_results: dict = field(default_factory=dict)
+    drive_url: str = ""
+
+    # 비용/메타
+    ai_cost_usd: float = 0.0
+    created_at: datetime = field(default_factory=datetime.now)
+    completed_at: Optional[datetime] = None
+    error_message: str = ""
+
+    # V1 호환
+    ai_content: AIContent = field(default_factory=AIContent)
+    status: CampaignStatus = CampaignStatus.DRAFT
