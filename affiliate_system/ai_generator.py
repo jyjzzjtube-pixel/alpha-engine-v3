@@ -1940,7 +1940,7 @@ AI 이미지 프롬프트 작성 규칙:
                     config=types.GenerateImagesConfig(
                         number_of_images=count_per_prompt,
                         aspect_ratio=aspect_ratio,
-                        safety_filter_level="BLOCK_ONLY_HIGH",
+                        safety_filter_level="block_low_and_above",
                     ),
                 )
 

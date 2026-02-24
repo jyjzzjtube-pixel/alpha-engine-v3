@@ -1001,22 +1001,39 @@ class ShortsRenderer:
 # ═══════════════════════════════════════════════════════════════════════════
 
 # 상품 유형별 BGM 장르 매핑 (잔잔한 상품 소개 스타일)
+# 한국어 + 영어 키워드 모두 지원
 PRODUCT_BGM_MAP = {
-    "식품": "chill",
-    "음료": "chill",
-    "화장품": "lofi",
-    "뷰티": "lofi",
-    "생활용품": "chill",
-    "세제": "chill",
-    "전자기기": "cinematic",
-    "가전": "cinematic",
-    "패션": "trendy",
-    "의류": "trendy",
-    "건강": "lofi",
-    "다이어트": "upbeat",
-    "유아": "chill",
-    "반려동물": "chill",
-    "스포츠": "energetic",
+    # 식품/음료 → 잔잔하고 따뜻한
+    "식품": "chill", "음료": "chill", "생수": "chill", "물": "chill",
+    "커피": "chill", "차": "chill", "과자": "chill", "라면": "chill",
+    "food": "chill", "beverage": "chill", "water": "chill", "drink": "chill",
+    # 화장품/뷰티 → 세련되고 부드러운
+    "화장품": "lofi", "뷰티": "lofi", "스킨케어": "lofi", "메이크업": "lofi",
+    "cosmetic": "lofi", "beauty": "lofi", "skincare": "lofi", "makeup": "lofi",
+    # 생활용품/세제 → 편안한
+    "생활용품": "chill", "세제": "chill", "세탁": "chill", "청소": "chill",
+    "주방": "chill", "퍼실": "chill", "섬유유연제": "chill",
+    "household": "chill", "detergent": "chill", "cleaning": "chill",
+    # 전자기기/가전 → 고급스러운
+    "전자기기": "cinematic", "가전": "cinematic", "노트북": "cinematic",
+    "스마트폰": "cinematic", "폰": "cinematic", "갤럭시": "cinematic",
+    "아이폰": "cinematic", "태블릿": "cinematic", "이어폰": "cinematic",
+    "electronic": "cinematic", "tech": "cinematic", "phone": "cinematic",
+    "laptop": "cinematic", "galaxy": "cinematic", "iphone": "cinematic",
+    # 패션/의류 → 트렌디한
+    "패션": "trendy", "의류": "trendy", "옷": "trendy", "신발": "trendy",
+    "가방": "trendy", "액세서리": "trendy",
+    "fashion": "trendy", "clothing": "trendy", "shoes": "trendy",
+    # 건강/다이어트 → 차분한/활기찬
+    "건강": "lofi", "영양제": "lofi", "비타민": "lofi",
+    "다이어트": "upbeat", "운동": "upbeat", "fitness": "upbeat",
+    "health": "lofi", "vitamin": "lofi",
+    # 유아/반려동물 → 편안한
+    "유아": "chill", "아기": "chill", "반려동물": "chill", "펫": "chill",
+    "baby": "chill", "pet": "chill", "kids": "chill",
+    # 스포츠 → 에너지
+    "스포츠": "energetic", "sport": "energetic", "gym": "energetic",
+    # 기본값
     "default": "chill",
 }
 
@@ -1293,9 +1310,9 @@ class ProShortsRenderer:
                 "-pix_fmt", "yuv420p",
             ]
             if self.encoder == "h264_nvenc":
-                enc_args += ["-preset", FFMPEG_PRESET, "-rc", "constqp", "-qp", "20"]
+                enc_args += ["-preset", FFMPEG_PRESET, "-rc", "constqp", "-qp", FFMPEG_CRF]
             else:
-                enc_args += ["-preset", "fast", "-crf", "20"]
+                enc_args += ["-preset", "medium", "-crf", FFMPEG_CRF]
             enc_args.append(output_path)
 
             success = _run_ffmpeg(enc_args, desc=f"모션+컬러 인코딩 {idx+1}/{total}")
@@ -1334,9 +1351,9 @@ class ProShortsRenderer:
             "-pix_fmt", "yuv420p",
         ]
         if self.encoder == "h264_nvenc":
-            args += ["-preset", FFMPEG_PRESET, "-rc", "constqp", "-qp", "20"]
+            args += ["-preset", FFMPEG_PRESET, "-rc", "constqp", "-qp", FFMPEG_CRF]
         else:
-            args += ["-preset", "fast", "-crf", "20"]
+            args += ["-preset", "medium", "-crf", FFMPEG_CRF]
         args.append(output_path)
         return _run_ffmpeg(args, desc=f"트림+컬러 {idx+1}/{total}")
 
@@ -1539,57 +1556,76 @@ class ProShortsRenderer:
         output_path: str,
         uid: str,
     ) -> bool:
-        """비디오 + 오디오 + 자막 최종 합성."""
+        """비디오 + 오디오 + 자막 최종 합성.
+
+        중요: -filter_complex 와 -vf 를 동시에 쓰면 FFmpeg 충돌.
+        모든 필터(자막+오디오)를 하나의 filter_complex 그래프로 통합.
+        """
         final_args = ["-i", video_path]
-        filter_complex_parts = []
-        audio_inputs = []
+        fc_parts = []       # filter_complex 파트들
+        input_count = 1     # 0번은 video
 
         # TTS 오디오
         tts_input_idx = None
         if tts_path and Path(tts_path).exists():
-            tts_input_idx = 1
+            tts_input_idx = input_count
             final_args += ["-i", tts_path]
-            audio_inputs.append(tts_input_idx)
+            input_count += 1
 
         # BGM
         bgm_input_idx = None
         if bgm_path and Path(bgm_path).exists():
-            bgm_input_idx = len(audio_inputs) + 1
+            bgm_input_idx = input_count
             final_args += ["-i", bgm_path]
-            audio_inputs.append(bgm_input_idx)
+            input_count += 1
 
-        # 오디오 믹스 필터 (TTS 볼륨 1.0 + BGM 볼륨 0.06 — 잔잔하게)
-        if tts_input_idx is not None and bgm_input_idx is not None:
-            filter_complex_parts.append(
-                f"[{tts_input_idx}:a]volume=1.0[tts];"
-                f"[{bgm_input_idx}:a]volume=0.06,afade=t=in:st=0:d=1.5,afade=t=out:st={{out_fade_st}}:d=2.0[bgm];"
-                f"[tts][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]"
-            )
-            # out_fade_st 계산 (나중에 교체)
-            probe = _run_ffprobe(video_path)
-            vid_dur = probe.get("duration", 30.0)
-            out_fade_st = max(0, vid_dur - 2.0)
-            filter_complex_parts[0] = filter_complex_parts[0].replace(
-                "{out_fade_st}", f"{out_fade_st:.1f}"
-            )
-            audio_map = ["-map", "0:v", "-map", "[aout]"]
-        elif tts_input_idx is not None:
-            audio_map = ["-map", "0:v", "-map", f"{tts_input_idx}:a"]
-        elif bgm_input_idx is not None:
-            filter_complex_parts.append(
-                f"[{bgm_input_idx}:a]volume=0.10[bgm_only]"
-            )
-            audio_map = ["-map", "0:v", "-map", "[bgm_only]"]
-        else:
-            audio_map = ["-map", "0:v"]
-
-        # 자막 필터 (ASS burn-in)
-        video_filter = ""
+        # ── 비디오 필터 (자막 burn-in) ──
+        # 자막이 있으면 filter_complex 안에서 처리
+        sub_escaped = ""
         if subtitle_path and Path(subtitle_path).exists():
             sub_escaped = str(subtitle_path).replace("\\", "/").replace(":", "\\:")
-            video_filter = f"ass='{sub_escaped}'"
 
-        # 인코더 옵션
+        if sub_escaped:
+            fc_parts.append(f"[0:v]ass='{sub_escaped}'[vout]")
+            video_map = "[vout]"
+        else:
+            video_map = "0:v"
+
+        # ── 오디오 필터 (TTS + BGM 믹싱) ──
+        probe = _run_ffprobe(video_path)
+        vid_dur = probe.get("duration", 30.0)
+
+        if tts_input_idx is not None and bgm_input_idx is not None:
+            # TTS + BGM 동시 믹싱 — BGM 볼륨 0.07 (잔잔하게) + 사이드체인 덕킹 효과
+            out_fade_st = max(0, vid_dur - 2.0)
+            fc_parts.append(
+                f"[{tts_input_idx}:a]volume=1.0[tts];"
+                f"[{bgm_input_idx}:a]volume=0.07,"
+                f"afade=t=in:st=0:d=1.5,"
+                f"afade=t=out:st={out_fade_st:.1f}:d=2.0[bgm];"
+                f"[tts][bgm]amix=inputs=2:duration=first:dropout_transition=2,"
+                f"dynaudnorm=f=150:g=15[aout]"
+            )
+            audio_map = "[aout]"
+        elif tts_input_idx is not None:
+            # TTS만
+            fc_parts.append(
+                f"[{tts_input_idx}:a]dynaudnorm=f=150:g=15[aout]"
+            )
+            audio_map = "[aout]"
+        elif bgm_input_idx is not None:
+            # BGM만 (TTS 없는 경우 BGM 볼륨 약간 올림)
+            out_fade_st = max(0, vid_dur - 2.0)
+            fc_parts.append(
+                f"[{bgm_input_idx}:a]volume=0.12,"
+                f"afade=t=in:st=0:d=1.5,"
+                f"afade=t=out:st={out_fade_st:.1f}:d=2.0[aout]"
+            )
+            audio_map = "[aout]"
+        else:
+            audio_map = None
+
+        # ── 인코더 옵션 (최고 품질: CRF 18) ──
         if self.encoder == "h264_nvenc":
             enc_opts = [
                 "-c:v", self.encoder,
@@ -1599,14 +1635,15 @@ class ProShortsRenderer:
         else:
             enc_opts = ["-c:v", self.encoder, "-preset", "medium", "-crf", FFMPEG_CRF]
 
-        # 최종 명령 조립
-        if filter_complex_parts:
-            final_args += ["-filter_complex", ";".join(filter_complex_parts)]
+        # ── 최종 명령 조립 (filter_complex 통합) ──
+        if fc_parts:
+            final_args += ["-filter_complex", ";".join(fc_parts)]
 
-        if video_filter:
-            final_args += ["-vf", video_filter]
+        # 맵핑 — filter_complex 내 라벨 사용
+        final_args += ["-map", video_map]
+        if audio_map:
+            final_args += ["-map", audio_map]
 
-        final_args += audio_map
         final_args += enc_opts
         final_args += [
             "-c:a", "aac", "-b:a", "192k",

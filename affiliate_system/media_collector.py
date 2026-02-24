@@ -91,21 +91,31 @@ class MediaCollector:
         resp = requests.get(
             "https://api.pexels.com/v1/search",
             headers={"Authorization": PEXELS_API_KEY},
-            params={"query": query, "per_page": min(count, 80)},
+            params={
+                "query": query,
+                "per_page": min(count * 2, 80),  # 여유분 요청 (고화질 필터용)
+                "size": "large",                   # 고해상도 우선
+            },
             timeout=_REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
         data = resp.json()
 
         results: list[dict] = []
-        for photo in data.get("photos", [])[:count]:
+        for photo in data.get("photos", []):
+            if len(results) >= count:
+                break
             src = photo.get("src", {})
+            # 고해상도 이미지 우선: original > large2x > large
+            url = src.get("original") or src.get("large2x") or src.get("large", "")
             results.append({
                 "id": str(photo.get("id", "")),
-                "url": src.get("large") or src.get("original", ""),
+                "url": url,
                 "thumb": src.get("medium") or src.get("small", ""),
                 "title": photo.get("alt", ""),
                 "photographer": photo.get("photographer", ""),
+                "width": photo.get("width", 0),
+                "height": photo.get("height", 0),
                 "source": "pexels",
                 "license": "Pexels License (free commercial use)",
             })
@@ -254,7 +264,12 @@ class MediaCollector:
         resp = requests.get(
             "https://api.pexels.com/videos/search",
             headers={"Authorization": PEXELS_API_KEY},
-            params={"query": query, "per_page": min(count, 80)},
+            params={
+                "query": query,
+                "per_page": min(count * 2, 80),    # 여유분 (세로 필터용)
+                "orientation": "portrait",          # 세로 영상 우선 (9:16 숏폼용)
+                "size": "large",                    # 고화질
+            },
             timeout=_REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
@@ -310,8 +325,9 @@ class MediaCollector:
             params={
                 "key": PIXABAY_API_KEY,
                 "q": query,
-                "per_page": min(count, 200),
+                "per_page": min(count * 2, 200),  # 여유분
                 "safesearch": "true",
+                "min_height": 1080,                # 최소 1080p 이상
             },
             timeout=_REQUEST_TIMEOUT,
         )
@@ -1091,10 +1107,12 @@ class OmniMediaCollector:
             return []
 
         try:
-            resp = self.session.get(
+            # 주의: self.session은 Anti-Ban 용도 (Accept-Encoding: br 포함)
+            # API 호출은 requests.get 직접 사용 — Brotli 디코딩 이슈 방지
+            resp = requests.get(
                 "https://api.pexels.com/videos/search",
-                params={"query": query, "per_page": count * 3, "orientation": "portrait"},
-                headers={"Authorization": PEXELS_API_KEY},
+                params={"query": query, "per_page": count * 3, "orientation": "portrait", "size": "large"},
+                headers={"Authorization": PEXELS_API_KEY, "Accept": "application/json"},
                 timeout=15,
             )
             resp.raise_for_status()
@@ -1144,7 +1162,8 @@ class OmniMediaCollector:
             all_hits = []
 
             for q in queries:
-                resp = self.session.get(
+                # API 호출은 requests.get 직접 사용 — session의 br 인코딩 이슈 방지
+                resp = requests.get(
                     "https://pixabay.com/api/videos/",
                     params={
                         "key": PIXABAY_API_KEY,
