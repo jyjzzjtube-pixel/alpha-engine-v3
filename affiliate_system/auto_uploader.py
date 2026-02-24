@@ -25,6 +25,13 @@ from affiliate_system.config import (
     INSTAGRAM_DM_DELAY,
     RENDER_OUTPUT_DIR,
     PROJECT_DIR,
+    # V2 전환율 강화 상수
+    DM_PROMPT_TEMPLATE,
+    DM_REPLY_TEMPLATE,
+    DM_KEYWORD_DEFAULT,
+    COPYRIGHT_DEFENSE_TEXT,
+    COPYRIGHT_EMAIL,
+    COUPANG_DISCLAIMER,
 )
 from affiliate_system.models import Campaign, Platform
 from affiliate_system.utils import setup_logger, retry
@@ -892,3 +899,419 @@ class StealthUploader:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
         return False
+
+    # ================================================================
+    #  V2 — 쿠팡 링크 자동 배치 + 전환율 강화
+    # ================================================================
+
+    def _build_youtube_description_v2(
+        self,
+        product_title: str,
+        affiliate_link: str,
+        body_text: str = "",
+        hashtags: list[str] = None,
+        dm_keyword: str = "",
+    ) -> str:
+        """V2 YouTube Shorts 설명란 — 쿠팡 링크 + 저작권 방어 자동 삽입.
+
+        구조:
+        [후킹 한 줄] → [쿠팡 링크] → [DM 유도] → [본문 요약] →
+        [저작권 방어] → [해시태그] → [면책고지]
+        """
+        parts = []
+
+        # ── 쿠팡 링크 (최상단 배치) ──
+        if affiliate_link:
+            parts.append(f"🛒 최저가 구매 링크 👇")
+            parts.append(affiliate_link)
+            parts.append("")
+
+        # ── DM 유도 문구 ──
+        if dm_keyword:
+            dm_text = DM_PROMPT_TEMPLATE.format(keyword=dm_keyword)
+            parts.append(f"💬 {dm_text}")
+            parts.append("")
+
+        # ── 본문 요약 (짧게) ──
+        if body_text:
+            # 설명란은 200자 이내로 축약
+            summary = body_text[:200].strip()
+            if len(body_text) > 200:
+                summary += "..."
+            parts.append(summary)
+            parts.append("")
+
+        # ── 저작권 방어 문구 ──
+        parts.append("─" * 20)
+        defense = COPYRIGHT_DEFENSE_TEXT
+        if COPYRIGHT_EMAIL:
+            defense += f"\n📧 {COPYRIGHT_EMAIL}"
+        parts.append(defense)
+        parts.append("")
+
+        # ── 해시태그 ──
+        if hashtags:
+            tags_str = " ".join(f"#{tag.strip().lstrip('#')}" for tag in hashtags if tag.strip())
+            parts.append(tags_str)
+            parts.append("")
+
+        # ── 쿠팡 파트너스 면책고지 ──
+        parts.append(COUPANG_DISCLAIMER)
+
+        return "\n".join(parts)
+
+    def _build_instagram_caption_v2(
+        self,
+        product_title: str,
+        affiliate_link: str,
+        body_text: str = "",
+        hashtags: list[str] = None,
+        dm_keyword: str = "",
+    ) -> str:
+        """V2 Instagram Reels 캡션 — 쿠팡 링크 + DM 유도 자동 삽입.
+
+        구조:
+        [후킹 텍스트] → [본문] → [DM 유도] → [쿠팡 링크] → [해시태그]
+        """
+        parts = []
+
+        # ── 후킹 + 본문 ──
+        if body_text:
+            # 인스타그램 캡션 제한 2200자, 핵심만 삽입
+            caption_text = body_text[:500].strip()
+            parts.append(caption_text)
+            parts.append("")
+
+        # ── DM 유도 문구 (핵심 전환 요소) ──
+        if dm_keyword:
+            dm_text = DM_PROMPT_TEMPLATE.format(keyword=dm_keyword)
+            parts.append(f"💬 {dm_text}")
+            parts.append("")
+
+        # ── 쿠팡 링크 ──
+        if affiliate_link:
+            parts.append(f"🔗 구매 링크: {affiliate_link}")
+            parts.append("")
+
+        # ── 해시태그 ──
+        if hashtags:
+            tags = " ".join(f"#{tag.strip().lstrip('#')}" for tag in hashtags[:30] if tag.strip())
+            parts.append(tags)
+
+        # ── 면책고지 (간략) ──
+        parts.append("")
+        parts.append(COUPANG_DISCLAIMER)
+
+        return "\n".join(parts)
+
+    @retry(max_attempts=2, delay=5.0)
+    def youtube_upload_v2(
+        self,
+        video_path: str,
+        title: str,
+        product_title: str,
+        affiliate_link: str,
+        body_text: str = "",
+        hashtags: list[str] = None,
+        dm_keyword: str = "",
+        privacy: str = "private",
+    ) -> dict:
+        """V2 YouTube Shorts 업로드 — 쿠팡 링크 + 저작권 방어 자동 포함.
+
+        기존 youtube_upload()를 래핑하여 V2 설명란을 자동 생성한다.
+        업로드 완료 후 고정 댓글에도 쿠팡 링크를 삽입한다.
+
+        Returns:
+            {"ok": True, "video_id": ..., "url": ..., "comment_id": ...}
+        """
+        # V2 설명란 자동 빌드
+        description = self._build_youtube_description_v2(
+            product_title=product_title,
+            affiliate_link=affiliate_link,
+            body_text=body_text,
+            hashtags=hashtags,
+            dm_keyword=dm_keyword,
+        )
+
+        # 기존 업로드 호출
+        result = self.youtube_upload(
+            video_path=video_path,
+            title=title,
+            description=description,
+            tags=hashtags or [],
+            privacy=privacy,
+        )
+
+        if not result.get("ok"):
+            return result
+
+        # ── 고정 댓글에 쿠팡 링크 삽입 ──
+        video_id = result.get("video_id", "")
+        if video_id and affiliate_link and self._yt_service:
+            try:
+                comment_text = (
+                    f"🛒 구매 링크: {affiliate_link}\n\n"
+                    f"📌 가장 저렴한 가격으로 확인해 보세요!\n"
+                    f"{COUPANG_DISCLAIMER}"
+                )
+                comment_result = self._yt_service.commentThreads().insert(
+                    part="snippet",
+                    body={
+                        "snippet": {
+                            "videoId": video_id,
+                            "topLevelComment": {
+                                "snippet": {
+                                    "textOriginal": comment_text,
+                                }
+                            },
+                        }
+                    },
+                ).execute()
+                comment_id = comment_result.get("id", "")
+                result["comment_id"] = comment_id
+                self.logger.info("YouTube 쿠팡 링크 댓글 등록 완료: %s", comment_id)
+            except Exception as exc:
+                self.logger.warning("YouTube 댓글 삽입 실패 (영상은 업로드됨): %s", exc)
+                result["comment_id"] = None
+
+        return result
+
+    @retry(max_attempts=2, delay=10.0)
+    def instagram_upload_reel_v2(
+        self,
+        video_path: str,
+        product_title: str,
+        affiliate_link: str,
+        body_text: str = "",
+        hashtags: list[str] = None,
+        dm_keyword: str = "",
+    ) -> dict:
+        """V2 Instagram Reel 업로드 — 캡션 + 첫 댓글에 쿠팡 링크.
+
+        Returns:
+            {"ok": True, "media_id": ..., "comment_ok": ...}
+        """
+        # V2 캡션 자동 빌드
+        caption = self._build_instagram_caption_v2(
+            product_title=product_title,
+            affiliate_link=affiliate_link,
+            body_text=body_text,
+            hashtags=hashtags,
+            dm_keyword=dm_keyword,
+        )
+
+        # 기존 업로드 호출
+        result = self.instagram_upload_reel(
+            video_path=video_path,
+            caption=caption,
+        )
+
+        if not result.get("ok"):
+            return result
+
+        # ── 첫 댓글에 쿠팡 링크 삽입 ──
+        media_id = result.get("media_id", "")
+        if media_id and affiliate_link and self._ig_client:
+            try:
+                comment_text = (
+                    f"🛒 구매 링크: {affiliate_link}\n"
+                    f"지금 확인해 보세요! 👆"
+                )
+                self._ig_client.media_comment(int(media_id), comment_text)
+                result["comment_ok"] = True
+                self.logger.info("Instagram 쿠팡 링크 첫 댓글 등록 완료")
+            except Exception as exc:
+                self.logger.warning("Instagram 댓글 삽입 실패 (릴은 업로드됨): %s", exc)
+                result["comment_ok"] = False
+
+        return result
+
+    def naver_blog_post_v2(
+        self,
+        title: str,
+        blog_html: str,
+        image_paths: list[str] = None,
+    ) -> dict:
+        """V2 네이버 블로그 작성 — blog_html_generator에서 생성된 HTML 사용.
+
+        기존 naver_blog_post()를 사용하되, V2 HTML은 이미 CTA/면책고지가
+        포함되어 있으므로 추가 처리 없이 직접 전달한다.
+
+        Args:
+            title: 블로그 제목 (SEO 키워드 포함).
+            blog_html: blog_html_generator로 생성된 완성 HTML.
+            image_paths: 이미지 파일 경로 리스트 (HTML 내 플레이스홀더 교체용).
+
+        Returns:
+            {"ok": True, "post_url": ...} 또는 {"ok": False, "reason": ...}
+        """
+        self.logger.info("V2 네이버 블로그 작성 시작: %s", title[:30])
+
+        # blog_html에는 이미 쿠팡 CTA + 면책고지가 포함되어 있음
+        # image_paths가 있으면 플레이스홀더를 실제 업로드 URL로 교체해야 하지만
+        # 네이버 에디터에서는 직접 이미지를 업로드하므로, HTML과 이미지를 함께 전달
+        return self.naver_blog_post(
+            title=title,
+            content_html=blog_html,
+            images=image_paths,
+        )
+
+    def instagram_dm_bot_v2(
+        self,
+        media_id: str,
+        dm_keyword: str,
+        affiliate_link: str,
+        batch_size: int = INSTAGRAM_DM_BATCH,
+    ) -> int:
+        """V2 Instagram DM 봇 — 쿠팡 어필리에이트 링크 자동 포함.
+
+        댓글에서 dm_keyword를 감지하면 쿠팡 링크가 포함된 DM을 전송한다.
+
+        Args:
+            media_id: 모니터링 대상 게시물 ID.
+            dm_keyword: 감지할 키워드 (예: "링크", "구매").
+            affiliate_link: 쿠팡 파트너스 어필리에이트 링크.
+            batch_size: 한 번에 처리할 DM 수.
+
+        Returns:
+            전송된 DM 수.
+        """
+        # V2 DM 템플릿에 쿠팡 링크 삽입
+        reply_text = DM_REPLY_TEMPLATE.format(affiliate_link=affiliate_link)
+
+        return self.instagram_dm_bot(
+            media_id=media_id,
+            keywords=[dm_keyword, DM_KEYWORD_DEFAULT],
+            reply_text=reply_text,
+            batch_size=batch_size,
+        )
+
+    def upload_v2_campaign(
+        self,
+        video_path: str,
+        blog_html: str,
+        blog_title: str,
+        blog_image_paths: list[str],
+        product_title: str,
+        affiliate_link: str,
+        body_text: str = "",
+        hashtags: list[str] = None,
+        dm_keyword: str = "링크",
+        platforms: list[str] = None,
+        progress_callback: Optional[Callable[[str, str], None]] = None,
+    ) -> dict:
+        """V2 통합 업로드 — 모든 플랫폼에 쿠팡 링크 자동 배치.
+
+        Args:
+            video_path: 숏폼 영상 경로.
+            blog_html: blog_html_generator로 생성된 HTML.
+            blog_title: 블로그 제목.
+            blog_image_paths: 블로그 이미지 경로 리스트.
+            product_title: 상품명.
+            affiliate_link: 쿠팡 파트너스 링크.
+            body_text: 본문 텍스트 (캡션/설명란용).
+            hashtags: 해시태그 리스트.
+            dm_keyword: DM 유도 키워드.
+            platforms: 업로드 플랫폼 리스트 (기본: 전부).
+            progress_callback: (platform, message) 콜백.
+
+        Returns:
+            {"naver_blog": {...}, "youtube": {...}, "instagram": {...}}
+        """
+        if platforms is None:
+            platforms = ["naver_blog", "youtube", "instagram"]
+
+        results = {}
+
+        def _notify(platform: str, msg: str):
+            if progress_callback:
+                try:
+                    progress_callback(platform, msg)
+                except Exception:
+                    pass
+
+        # ── 1. 네이버 블로그 (쿠팡 CTA + 면책고지 이미 포함) ──
+        if "naver_blog" in platforms and blog_html:
+            _notify("naver_blog", "네이버 블로그 작성 시작")
+            try:
+                result = self.naver_blog_post_v2(
+                    title=blog_title,
+                    blog_html=blog_html,
+                    image_paths=blog_image_paths,
+                )
+                results["naver_blog"] = result
+                _notify("naver_blog", "완료" if result["ok"] else f"실패: {result.get('reason', '')}")
+            except Exception as exc:
+                self.logger.error("V2 네이버 블로그 업로드 실패: %s", exc)
+                results["naver_blog"] = {"ok": False, "reason": str(exc)}
+                _notify("naver_blog", f"실패: {exc}")
+
+        # ── 2. YouTube Shorts (설명 + 고정 댓글에 쿠팡 링크) ──
+        if "youtube" in platforms and video_path and os.path.isfile(video_path):
+            if results.get("naver_blog"):
+                _notify("youtube", "인간화 딜레이 대기 중...")
+                self.humanizer_delay(min_sec=60, max_sec=180)
+
+            _notify("youtube", "YouTube Shorts 업로드 시작")
+            try:
+                result = self.youtube_upload_v2(
+                    video_path=video_path,
+                    title=product_title[:100],
+                    product_title=product_title,
+                    affiliate_link=affiliate_link,
+                    body_text=body_text,
+                    hashtags=hashtags,
+                    dm_keyword=dm_keyword,
+                    privacy="private",
+                )
+                results["youtube"] = result
+                _notify("youtube", "완료" if result["ok"] else f"실패: {result.get('reason', '')}")
+            except Exception as exc:
+                self.logger.error("V2 YouTube 업로드 실패: %s", exc)
+                results["youtube"] = {"ok": False, "reason": str(exc)}
+                _notify("youtube", f"실패: {exc}")
+
+        # ── 3. Instagram Reels (캡션 + 첫 댓글에 쿠팡 링크) ──
+        if "instagram" in platforms and video_path and os.path.isfile(video_path):
+            if results.get("youtube") or results.get("naver_blog"):
+                _notify("instagram", "인간화 딜레이 대기 중...")
+                self.humanizer_delay(min_sec=60, max_sec=180)
+
+            _notify("instagram", "Instagram Reel 업로드 시작")
+            try:
+                result = self.instagram_upload_reel_v2(
+                    video_path=video_path,
+                    product_title=product_title,
+                    affiliate_link=affiliate_link,
+                    body_text=body_text,
+                    hashtags=hashtags,
+                    dm_keyword=dm_keyword,
+                )
+                results["instagram"] = result
+                _notify("instagram", "완료" if result["ok"] else f"실패: {result.get('reason', '')}")
+
+                # ── DM 봇 시작 (업로드 성공 시) ──
+                if result.get("ok") and result.get("media_id") and dm_keyword:
+                    _notify("instagram", "DM 봇 초기 스캔 중...")
+                    try:
+                        dm_count = self.instagram_dm_bot_v2(
+                            media_id=result["media_id"],
+                            dm_keyword=dm_keyword,
+                            affiliate_link=affiliate_link,
+                        )
+                        results["instagram"]["dm_sent"] = dm_count
+                        self.logger.info("Instagram DM 봇: %d건 전송", dm_count)
+                    except Exception as dm_exc:
+                        self.logger.warning("Instagram DM 봇 실패: %s", dm_exc)
+                        results["instagram"]["dm_sent"] = 0
+
+            except Exception as exc:
+                self.logger.error("V2 Instagram 업로드 실패: %s", exc)
+                results["instagram"] = {"ok": False, "reason": str(exc)}
+                _notify("instagram", f"실패: {exc}")
+
+        self.logger.info(
+            "V2 통합 업로드 완료: %s",
+            {k: v.get("ok") for k, v in results.items()},
+        )
+        return results
