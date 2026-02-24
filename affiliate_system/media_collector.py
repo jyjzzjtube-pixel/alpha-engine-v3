@@ -1130,45 +1130,75 @@ class OmniMediaCollector:
     def _search_pixabay_portrait_videos(
         self, query: str, count: int = 3
     ) -> list[dict]:
-        """Pixabay Videos API — 세로 영상 필터."""
+        """Pixabay Videos API — 세로 영상 우선, 가로 영상도 수집 (크롭 처리).
+
+        세로(9:16) 영상이 없으면 가로(16:9) 영상도 수집하고
+        나중에 VideoLaunderer에서 세로로 크롭합니다.
+        """
         if not PIXABAY_API_KEY:
             return []
 
         try:
-            resp = self.session.get(
-                "https://pixabay.com/api/videos/",
-                params={
-                    "key": PIXABAY_API_KEY,
-                    "q": query,
-                    "per_page": count * 3,
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            # 여러 키워드로 검색 폭 넓히기
+            queries = [query, f"{query} product", f"{query} close up"]
+            all_hits = []
 
-            results = []
-            for hit in data.get("hits", []):
+            for q in queries:
+                resp = self.session.get(
+                    "https://pixabay.com/api/videos/",
+                    params={
+                        "key": PIXABAY_API_KEY,
+                        "q": q,
+                        "per_page": count * 3,
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                all_hits.extend(data.get("hits", []))
+                if len(all_hits) >= count * 3:
+                    break
+
+            # 중복 제거
+            seen_ids = set()
+            unique_hits = []
+            for hit in all_hits:
+                if hit["id"] not in seen_ids:
+                    seen_ids.add(hit["id"])
+                    unique_hits.append(hit)
+
+            # 세로 영상 우선, 가로 영상도 포함
+            portrait = []
+            landscape = []
+            for hit in unique_hits:
                 videos = hit.get("videos", {})
-                # medium 또는 large 화질
-                for quality in ["large", "medium"]:
+                for quality in ["large", "medium", "small"]:
                     vdata = videos.get(quality, {})
                     if vdata.get("url"):
                         w = vdata.get("width", 0)
                         h = vdata.get("height", 0)
-                        if h > w:  # 세로
-                            results.append({
-                                "url": vdata["url"],
-                                "duration": hit.get("duration", 0),
-                                "width": w,
-                                "height": h,
-                            })
-                            break
+                        entry = {
+                            "url": vdata["url"],
+                            "duration": hit.get("duration", 0),
+                            "width": w,
+                            "height": h,
+                            "needs_crop": h <= w,  # 가로면 세로 크롭 필요
+                        }
+                        if h > w:
+                            portrait.append(entry)
+                        else:
+                            landscape.append(entry)
+                        break
 
-                if len(results) >= count:
-                    break
+            # 세로 우선 + 가로 보충
+            results = portrait[:count]
+            if len(results) < count:
+                results.extend(landscape[:count - len(results)])
 
-            self.logger.info(f"Pixabay Portrait: {len(results)}개 발견")
+            self.logger.info(
+                f"Pixabay Video: 세로 {len(portrait)}개 + 가로 {len(landscape)}개 "
+                f"→ 반환 {len(results)}개"
+            )
             return results
 
         except Exception as e:

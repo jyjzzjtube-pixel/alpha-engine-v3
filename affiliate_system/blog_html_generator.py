@@ -91,6 +91,7 @@ class NaverBlogHTMLGenerator:
         cta_text: str = "",
         hashtags: list[str] = None,
         disclaimer: str = "",
+        banner_tag: str = "",
     ) -> str:
         """네이버 블로그용 HTML 생성.
 
@@ -150,8 +151,8 @@ class NaverBlogHTMLGenerator:
             parts.append(self._make_image_block(image_paths, 1))
             parts.append(self._make_body_block(body_sections, 1))
 
-            # ── 중간 CTA (쿠팡 링크) ──
-            parts.append(self._make_cta_block(coupang_link, cta_text))
+            # ── 중간 CTA (쿠팡 배너 이미지 + 링크) ──
+            parts.append(self._make_cta_block(coupang_link, cta_text, banner_tag))
             parts.append(f'<hr style="{self.STYLES["section_divider"]}">')
 
             # ── 이미지3 + 본문3 ──
@@ -162,8 +163,8 @@ class NaverBlogHTMLGenerator:
             parts.append(self._make_image_block(image_paths, 3))
             parts.append(self._make_body_block(body_sections, 3))
 
-            # ── 마지막 CTA (쿠팡 링크) ──
-            parts.append(self._make_cta_block(coupang_link, cta_text))
+            # ── 마지막 CTA (쿠팡 배너 이미지 + 링크) ──
+            parts.append(self._make_cta_block(coupang_link, cta_text, banner_tag))
 
             # ── 이미지5 (라이프스타일) ──
             if len(image_paths) > 4 and image_paths[4]:
@@ -240,23 +241,49 @@ class NaverBlogHTMLGenerator:
             f'</div>'
         )
 
-    def _make_cta_block(self, coupang_link: str, cta_text: str) -> str:
-        """CTA (Call-To-Action) 블록 — 쿠팡 링크 포함."""
+    def _make_cta_block(self, coupang_link: str, cta_text: str,
+                        banner_tag: str = "") -> str:
+        """CTA (Call-To-Action) 블록 — 쿠팡 배너 이미지 + 링크 포함.
+
+        네이버 블로그에서는 쿠팡 파트너스 배너(<a><img>) + 단축URL 버튼 배치.
+        배너 태그가 없으면 버튼만 표시.
+        """
         if not coupang_link:
             return ""
 
         safe_link = html_lib.escape(coupang_link)
         safe_text = html_lib.escape(cta_text)
 
-        return (
-            f'<div style="{self.STYLES["cta_wrap"]}">'
+        parts = [f'<div style="{self.STYLES["cta_wrap"]}">']
+
+        # 쿠팡 파트너스 배너/위젯 (배너 이미지 <a><img> 또는 iframe)
+        if banner_tag:
+            _tag = banner_tag.strip()
+            # 보안 검증: 쿠팡 관련 도메인인지 확인
+            is_coupang = any(domain in _tag for domain in (
+                "coupa.ng", "coupang.com", "coupangcdn.com",
+                "link.coupang.com",
+            ))
+            if is_coupang:
+                parts.append(
+                    f'<div style="text-align:center;margin-bottom:12px;">'
+                    f'{_tag}'
+                    f'</div>'
+                )
+
+        # CTA 텍스트 + 버튼
+        parts.append(
             f'<span style="{self.STYLES["cta_text"]}">'
             f'아래 버튼을 눌러 확인해 보세요!</span>'
+        )
+        parts.append(
             f'<a href="{safe_link}" target="_blank" rel="noopener" '
             f'style="{self.STYLES["cta_button"]}">'
             f'{safe_text}</a>'
-            f'</div>'
         )
+        parts.append('</div>')
+
+        return "\n".join(parts)
 
     def _text_to_html(self, text: str) -> str:
         """일반 텍스트를 HTML로 변환.

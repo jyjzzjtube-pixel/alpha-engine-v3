@@ -128,19 +128,27 @@ def _run_ffprobe(input_path: str) -> dict:
 
 
 def _check_gpu_encoder() -> str:
-    """GPU 인코더 사용 가능 여부 확인. 불가시 CPU 폴백."""
-    # NVENC 체크
+    """GPU 인코더 사용 가능 여부 확인. 불가시 CPU 폴백.
+
+    단순 인코더 목록 확인뿐 아니라 실제 CUDA 디바이스 접근 테스트.
+    """
     try:
+        # 실제 GPU 인코딩 테스트 (1프레임 → /dev/null)
         result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.1",
+             "-c:v", FFMPEG_ENCODER, "-frames:v", "1",
+             "-f", "null", "-"],
             capture_output=True, text=True, timeout=10,
             encoding='utf-8', errors='replace'
         )
-        if FFMPEG_ENCODER in result.stdout:
-            logger.info(f"GPU 인코더 사용: {FFMPEG_ENCODER}")
+        if result.returncode == 0:
+            logger.info(f"GPU 인코더 테스트 성공: {FFMPEG_ENCODER}")
             return FFMPEG_ENCODER
-    except Exception:
-        pass
+        else:
+            logger.warning(f"GPU 인코더 테스트 실패: {result.stderr[:200]}")
+    except Exception as e:
+        logger.warning(f"GPU 인코더 확인 에러: {e}")
 
     logger.warning(f"GPU 인코더 {FFMPEG_ENCODER} 불가, CPU 폴백: {FFMPEG_ENCODER_FALLBACK}")
     return FFMPEG_ENCODER_FALLBACK
@@ -377,30 +385,27 @@ class EmotionTTSEngine:
     async def _generate_tts_async(
         self, text: str, output_path: str, emotion: str = "friendly"
     ) -> bool:
-        """Edge-TTS SSML로 감정 연동 TTS 생성 (비동기)."""
+        """Edge-TTS 감정 연동 TTS 생성 (비동기).
+
+        SSML 대신 Communicate의 rate/pitch/volume 파라미터를 직접 사용.
+        Edge-TTS는 SSML을 텍스트로 읽어버리는 버그가 있으므로 plain text 방식 필수.
+        """
         try:
             import edge_tts
 
-            # 감정별 SSML prosody 파라미터
+            # 감정별 prosody 파라미터
             preset = TTS_EMOTION_PRESETS.get(emotion, TTS_EMOTION_PRESETS["friendly"])
-            rate = preset["rate"]
-            pitch = preset["pitch"]
-            volume = preset["volume"]
 
-            # SSML 생성
-            ssml = (
-                f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
-                f'xml:lang="ko-KR">'
-                f'<voice name="{self.TTS_VOICE}">'
-                f'<prosody rate="{rate}" pitch="{pitch}" volume="{volume}">'
-                f'{text}'
-                f'</prosody></voice></speak>'
+            communicate = edge_tts.Communicate(
+                text,
+                self.TTS_VOICE,
+                rate=preset["rate"],
+                pitch=preset["pitch"],
+                volume=preset["volume"],
             )
-
-            communicate = edge_tts.Communicate(ssml, self.TTS_VOICE)
             await communicate.save(output_path)
 
-            if Path(output_path).exists() and Path(output_path).stat().st_size > 1000:
+            if Path(output_path).exists() and Path(output_path).stat().st_size > 500:
                 return True
             else:
                 self.logger.warning(f"TTS 파일 너무 작음: {output_path}")

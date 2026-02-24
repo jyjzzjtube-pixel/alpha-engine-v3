@@ -1524,7 +1524,10 @@ English translation:"""
 #태그1 #태그2 #태그3 #태그4 #태그5 #태그6 #태그7
 
 [SEO키워드]
-메인키워드, 서브1, 서브2, 서브3"""
+메인키워드, 서브1, 서브2, 서브3
+
+[주의] 반드시 위 모든 섹션을 빠짐없이 작성하세요. 본문 각 섹션은 반드시 250-350자입니다.
+총 글자수 1,500~2,000자를 맞추세요. 짧게 쓰지 마세요. 자연스러운 한국어 블로그 글처럼 길게 써주세요."""
 
         try:
             raw = self._call_with_fallback(
@@ -1532,7 +1535,7 @@ English translation:"""
                 fallback_fn=lambda p, **kw: self._call_claude(
                     model=CLAUDE_HAIKU, prompt=p, **kw),
                 prompt=prompt,
-                max_tokens=4096,
+                max_tokens=8192,
                 temperature=0.8,
             )
             return self._parse_blog_v2_response(raw, coupang_link)
