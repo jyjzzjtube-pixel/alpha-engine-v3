@@ -1554,34 +1554,45 @@ English translation:"""
         }
 
         try:
-            # 섹션별 파싱
+            # Gemini가 **[제목]** 처럼 마크다운 볼드로 감싸는 경우 대비
+            # 전처리: **[라벨]** → [라벨] 으로 정규화
+            cleaned = re.sub(r'\*{1,2}\[', '[', raw)
+            cleaned = re.sub(r'\]\*{1,2}', ']', cleaned)
+
+            # 섹션별 파싱 — 다음 [섹션] 또는 문자열 끝까지 캡처
+            _NEXT = r'(?=\n\[|\Z)'
+
             sections = {
                 "제목": "title",
                 "인트로": "intro",
             }
 
             for label, key in sections.items():
-                pattern = rf'\[{label}\]\s*\n(.+?)(?=\n\[|\Z)'
-                match = re.search(pattern, raw, re.DOTALL)
+                pattern = rf'\[{label}\]\s*\n(.+?){_NEXT}'
+                match = re.search(pattern, cleaned, re.DOTALL)
                 if match:
                     result[key] = match.group(1).strip()
 
             # 본문 1~4 파싱
             for i in range(1, 5):
-                pattern = rf'\[본문{i}\]\s*\n(.+?)(?=\n\[|\Z)'
-                match = re.search(pattern, raw, re.DOTALL)
+                pattern = rf'\[본문{i}\]\s*\n(.+?){_NEXT}'
+                match = re.search(pattern, cleaned, re.DOTALL)
                 if match:
                     result["body_sections"].append(match.group(1).strip())
 
-            # 이미지 키워드 1~5 파싱
+            # 이미지 키워드 1~5 파싱 — 첫 줄만 키워드 (나머지는 본문에 속함)
             for i in range(1, 6):
-                pattern = rf'\[이미지{i}_키워드\]\s*\n(.+?)(?=\n\[|\Z)'
-                match = re.search(pattern, raw, re.DOTALL)
+                pattern = rf'\[이미지{i}_키워드\]\s*\n(.+?)(?=\n|$)'
+                match = re.search(pattern, cleaned)
                 if match:
-                    result["image_keywords"].append(match.group(1).strip())
+                    kw = match.group(1).strip()
+                    # 200자 이상이면 파싱 오류 — 첫 줄만 추출
+                    if len(kw) > 200:
+                        kw = kw.split('\n')[0].strip()
+                    result["image_keywords"].append(kw)
 
             # 해시태그 파싱
-            ht_match = re.search(r'\[해시태그\]\s*\n(.+?)(?=\n\[|\Z)', raw, re.DOTALL)
+            ht_match = re.search(rf'\[해시태그\]\s*\n(.+?){_NEXT}', cleaned, re.DOTALL)
             if ht_match:
                 ht_text = ht_match.group(1).strip()
                 result["hashtags"] = [
@@ -1589,7 +1600,7 @@ English translation:"""
                 ]
 
             # SEO 키워드 파싱
-            seo_match = re.search(r'\[SEO키워드\]\s*\n(.+?)(?=\n\[|\Z)', raw, re.DOTALL)
+            seo_match = re.search(rf'\[SEO키워드\]\s*\n(.+?){_NEXT}', cleaned, re.DOTALL)
             if seo_match:
                 seo_text = seo_match.group(1).strip()
                 result["seo_keywords"] = [
