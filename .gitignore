@@ -114,3 +114,19 @@ affiliate_system/workspace/
 # Database files
 *.db
 exchange_rate_cache.json
+
+# Large binary / media files
+*.mp4
+*.mp3
+*.wav
+*.avi
+*.mov
+
+# Test artifacts
+/test_img_*
+/test_vid_*
+/test_plain.*
+/test_ssml.*
+/visual_test*.py
+/bookmark_cleanup.py
+chromedriver.log
