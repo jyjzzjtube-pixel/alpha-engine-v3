@@ -283,7 +283,7 @@ function rRpt(){const d=(D[Y]||{})[M];if(!d){$('#ct').innerHTML=`<div class="emp
       <div class="rr"><span class="rl b">지급액</span><span class="rv">${fmt(c.n)}</span></div>
       <div class="rr"><span class="rl b" style="color:var(--red)">총 지출</span><span class="rv" style="color:var(--red);font-weight:700">${fmt(totalExp)}</span></div>
       <div style="flex:1"></div>
-      <div class="pbox ${profit>=0?'pos':'neg'}"><div class="pbox-l" style="font-size:12px">수익</div><div class="pbox-v" style="color:${pC};font-size:24px">${fmt(profit)}</div></div>
+      <div class="pbox ${profit>=0?'pos':'neg'}"><div class="pbox-l" style="font-size:12px">세전 수익</div><div class="pbox-v" style="color:${pC};font-size:24px">${fmt(profit)}</div></div>
     </div></div>
 
       <!-- ③ 세금계산서 -->
