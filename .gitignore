@@ -81,6 +81,7 @@ nul
 *.html
 !index.html
 !bridgeone_dashboard.html
+!sinchon_v4_current.html
 *.gs
 *.json
 !package.json
