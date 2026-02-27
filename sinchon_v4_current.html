@@ -274,9 +274,7 @@ function rRpt(){const d=(D[Y]||{})[M];if(!d){$('#ct').innerHTML=`<div class="emp
       <div class="rr hl"><span class="rl b">지급액</span><span class="rv big" style="color:var(--accent)">${fmt(c.n)}</span></div>
       <div class="rr sep"></div>
       <div class="rr"><span class="rl">기장료</span><span class="rv">${fmt(c.u)}</span></div>
-      <div class="rr"><span class="rl">엔푸드</span><span class="rv">${fmt(d.foodDetail?.entree)}</span></div>
-      <div class="rr"><span class="rl">우삼겹&식자재</span><span class="rv">${fmt(d.foodDetail?.side)}</span></div>
-      <div class="rr"><span class="rl">식용유</span><span class="rv">${fmt(d.foodDetail?.oil)}</span></div>
+      ${(d.foodItems||[{l:'엔푸드',v:d.foodDetail?.entree},{l:'우삼겹&식자재',v:d.foodDetail?.side},{l:'식용유',v:d.foodDetail?.oil}]).filter(it=>it.v).map(it=>'<div class="rr"><span class="rl">'+it.l+'</span><span class="rv">'+fmt(it.v)+'</span></div>').join('')}
       <div class="rr" style="border-bottom:2px solid var(--border)"><span class="rl b">식재료 합계</span><span class="rv" style="font-weight:700">${fmt(c.f)}</span></div>
       <div class="rr"><span class="rl b">인건비 합계</span><span class="rv" style="font-weight:700">${fmt(c.l)}</span></div>
       <div style="padding:2px 0 0;font-size:10px;color:var(--text3);font-style:italic">* 4대보험 및 세금 포함</div>
@@ -617,6 +615,8 @@ function recalcAll(d){
   d.totalInsurance=tI;d.totalTax=tT;
   d.totalNet=totalNet;
   d.laborCost=totalNet+tI+tT;
+  // 식재료 합계도 foodItems에서 동적 계산
+  if(d.foodItems)d.foodCost=d.foodItems.reduce(function(a,it){return a+(parseInt(it.v)||0)},0);
 }
 
 // 섹션별 OCR (다중파일 지원)
@@ -1187,9 +1187,9 @@ function dStf(el){
 function savM(){if(!D[Y])D[Y]={};
   const staff=[];$$('.stf').forEach((_,i)=>{const sal=gv(`ss-${i}`),ded=gv(`sd-${i}`);staff.push({name:$(`[data-f="sn-${i}"]`)?.value||'',salary:sal,type:$(`[data-f="st-${i}"]`)?.value||'4대보험',ded,net:sal-ded})});
   const foodItems=getDynItems('food'),insItems=getDynItems('ins'),taxItems=getDynItems('tax'),etcItems=getDynItems('etc');
-  const fe=foodItems[0]?.v||0,fs=foodItems[1]?.v||0,fo=foodItems[2]?.v||0;
+  var fdObj={};foodItems.forEach(function(it){fdObj[it.l]=it.v||0});
   D[Y][M]={revenue:gv('revenue'),commission:gv('commission'),netRevenue:gv('revenue')-gv('commission'),
-    foodCost:dynTot('food'),foodDetail:{entree:fe,side:fs,oil:fo},
+    foodCost:dynTot('food'),foodDetail:{entree:foodItems[0]?.v||0,side:foodItems[1]?.v||0,oil:foodItems[2]?.v||0},
     rent:etcItems.find(x=>x.l.includes('임대'))?.v||gv('commission'),utilities:etcItems.find(x=>x.l.includes('기장'))?.v||132000,hongPay:etcItems.find(x=>x.l.includes('홍순우'))?.v||0,
     staff,totalSalary:staff.reduce((a,s)=>a+s.salary,0),
     insurance:{health:insItems[0]?.v||0,employ:insItems[1]?.v||0,injury:insItems[2]?.v||0},totalInsurance:dynTot('ins'),
