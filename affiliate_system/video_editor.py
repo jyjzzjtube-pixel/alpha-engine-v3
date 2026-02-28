@@ -1917,7 +1917,11 @@ class VideoForge:
     def generate_bgm_pro(
         output_path: str, duration: float, genre: str = "lofi",
     ) -> str:
-        """장르별 프로시저럴 BGM을 생성한다.
+        """장르별 BGM을 생성한다.
+
+        우선순위:
+        1. affiliate_system/bgm/{genre}.wav 파일이 있으면 해당 파일 사용 (HQ)
+        2. 파일 없으면 프로시저럴 합성 폴백
 
         Args:
             output_path: 출력 .wav 파일 경로
@@ -1927,6 +1931,27 @@ class VideoForge:
         Returns:
             출력 파일 경로
         """
+        # ── 파일 기반 BGM 우선 사용 ──
+        bgm_dir = Path(__file__).parent / "bgm"
+        bgm_file = bgm_dir / f"{genre}.wav"
+        if not bgm_file.exists():
+            # 장르 매핑 폴백 (cinematic→chill, energetic→upbeat 등)
+            genre_fallback = {
+                "cinematic": "chill", "dramatic": "chill",
+                "energetic": "upbeat", "trendy": "upbeat",
+            }
+            alt = genre_fallback.get(genre, "lofi")
+            bgm_file = bgm_dir / f"{alt}.wav"
+
+        if bgm_file.exists():
+            import shutil
+            log.info("파일 기반 BGM 사용: %s", bgm_file.name)
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            shutil.copy2(str(bgm_file), output_path)
+            return output_path
+
+        # ── 프로시저럴 합성 폴백 ──
+        log.info("프로시저럴 BGM 합성 (파일 미발견): genre=%s", genre)
         params = BGM_GENRE_PARAMS.get(genre, BGM_GENRE_PARAMS["lofi"])
         sr = 44100
         total_samples = int(sr * duration)
@@ -2723,7 +2748,7 @@ class VideoForge:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def apply_motion_effect(clip, effect_name: str, zoom_ratio: float = 1.2):
+    def apply_motion_effect(clip, effect_name: str, zoom_ratio: float = 1.12):
         """
         클립에 단일 모션 이펙트를 적용한다.
 

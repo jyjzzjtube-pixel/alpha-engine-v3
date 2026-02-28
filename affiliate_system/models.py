@@ -97,8 +97,8 @@ class PlatformPreset:
     thumb_format: str = "JPEG"
 
     # TTS/오디오
-    tts_speed: str = "+15%"
-    bgm_volume: float = 0.08        # BGM 볼륨 (TTS 있을 때)
+    tts_speed: str = "+5%"          # +15%→+5% 자연스러운 속도
+    bgm_volume: float = 0.12        # BGM 볼륨 (0.08→0.12 약간 UP)
     bgm_genre: BGMGenre = BGMGenre.LOFI
 
     # 자막 스펙
@@ -365,7 +365,7 @@ class RenderConfig:
     width: int = 1080
     height: int = 1920
     fps: int = 60
-    tts_speed: str = "+15%"
+    tts_speed: str = "+5%"          # +15%→+5% 자연스러운 속도
     tts_voice: str = "ko-female"
     effect_mode: str = "dynamic"
     # Anti-ban (HQ 모드에서는 전부 False)
@@ -389,7 +389,7 @@ class RenderConfig:
     transition_duration: float = 0.4
     text_animation: str = "fade_in"
     bgm_genre: str = "lofi"
-    bgm_volume: float = 0.08
+    bgm_volume: float = 0.12       # 0.08→0.12 BGM 볼륨 UP
     # 브랜딩
     branding_config: Optional[BrandingConfig] = None
     watermark_enabled: bool = False

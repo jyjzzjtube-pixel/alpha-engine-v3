@@ -45,6 +45,8 @@ from affiliate_system.models import (
 from affiliate_system.editor_tab import EditorTab
 from affiliate_system.db_viewer_tab import DBViewerTab
 from affiliate_system.ai_review_tab import AIReviewTab
+from affiliate_system.shopping_shorts_tab import ShoppingShortsTab
+from affiliate_system.product_explorer_tab import ProductExplorerTab
 
 
 # ══════════════════════════════════════════════════════════════
@@ -2388,6 +2390,8 @@ class MainWindow(QMainWindow):
         self.tabs.setDocumentMode(True)
 
         self.dashboard_tab = DashboardTab(self.tracker, self.console)
+        self.product_tab = ProductExplorerTab()
+        self.shorts_tab = ShoppingShortsTab()
         self.command_tab = CommandCenterTab()
         self.editor_tab = EditorTab()
         self.db_viewer_tab = DBViewerTab()
@@ -2395,6 +2399,8 @@ class MainWindow(QMainWindow):
         self.settings_tab = SettingsTab()
 
         self.tabs.addTab(self.dashboard_tab,  "  대시보드  ")
+        self.tabs.addTab(self.product_tab,    "  상품 탐색  ")
+        self.tabs.addTab(self.shorts_tab,     "  쇼핑쇼츠  ")
         self.tabs.addTab(self.command_tab,    "  작업 센터  ")
         self.tabs.addTab(self.editor_tab,     "  편집  ")
         self.tabs.addTab(self.db_viewer_tab,  "  DB 뷰어  ")
@@ -2431,6 +2437,33 @@ class MainWindow(QMainWindow):
         # 편집 탭 → 구글 드라이브 업로드
         self.editor_tab.upload_to_drive.connect(
             self._on_editor_drive_upload)
+
+        # 상품 탐색 → 쇼핑쇼츠/블로그 연동
+        self.product_tab.product_selected.connect(
+            self._on_product_to_action)
+
+    @pyqtSlot(dict)
+    def _on_product_to_action(self, data: dict):
+        """상품 탐색 탭에서 상품 선택 → 쇼핑쇼츠 or 블로그 탭으로 이동"""
+        action = data.get("action", "shorts")
+        title = data.get("title", "")
+        price = data.get("price", "")
+        link = data.get("affiliate_link", "")
+        desc = data.get("description", "")
+
+        if action == "shorts":
+            # 쇼핑쇼츠 탭에 상품 정보 자동 입력
+            self.shorts_tab.set_product_info(title, desc, link)
+            self.tabs.setCurrentWidget(self.shorts_tab)
+            self.console.log(f"상품 → 쇼핑쇼츠: {title[:40]}")
+        elif action == "blog":
+            # 작업센터 Mode-A에 상품 URL 입력
+            if hasattr(self.command_tab, 'mode_a'):
+                mode_a = self.command_tab.mode_a
+                if hasattr(mode_a, 'url_input'):
+                    mode_a.url_input.setText(link)
+            self.tabs.setCurrentWidget(self.command_tab)
+            self.console.log(f"상품 → 블로그: {title[:40]}")
 
     @pyqtSlot(object)
     def _on_campaign_created(self, campaign: Campaign):

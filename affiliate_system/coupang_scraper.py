@@ -303,27 +303,66 @@ class CoupangScraper:
         logger.warning(f"제휴 링크 응답에 shortenUrl 없음: {result}")
         return ""
 
+    def generate_simple_link(self, keyword: str) -> str:
+        """쿠팡 간편 링크 생성 — 검색 결과 페이지를 어필리에이트 링크로 변환
+
+        직접 상품 URL 대신 검색 URL 사용:
+        - 품절 리스크 없음 (검색 결과에서 아무 상품이나 구매해도 수수료 발생)
+        - 24시간 쿠키로 수수료 범위 넓음
+        - 4탄 핵심 전략: 쿠팡 간편 링크 = 검색 페이지 연결
+
+        Args:
+            keyword: 상품 검색 키워드 (예: "일회용 후드 그릴")
+
+        Returns:
+            제휴 추적 단축 URL 또는 빈 문자열
+        """
+        import urllib.parse
+        # 쿠팡 검색 URL 생성
+        encoded_keyword = urllib.parse.quote(keyword)
+        search_url = f"https://www.coupang.com/np/search?component=&q={encoded_keyword}&channel=user"
+        logger.info(f"쿠팡 간편 링크 생성: '{keyword}' → {search_url[:80]}...")
+        return self.generate_affiliate_link(search_url)
+
     # ──────────────────────────────────────────────
-    # Coupang Partners 상품 검색 API (스크래핑 폴백)
+    # Coupang Partners 상품 검색 API + 웹 스크래핑 폴백
     # ──────────────────────────────────────────────
 
     def search_products(self, keyword: str, limit: int = 5) -> list[Product]:
-        """Coupang Partners 상품 검색 API로 상품을 검색한다.
-
-        웹 스크래핑이 차단될 때의 대안 방법.
-        검색 결과에 제휴 링크가 이미 포함되어 있다.
+        """쿠팡 상품을 검색한다. API 우선 → 다나와 → 쿠팡 스크래핑 → 네이버 쇼핑 폴백.
 
         Args:
             keyword: 검색 키워드
             limit: 결과 수 (기본 5)
 
         Returns:
-            Product 리스트 (제휴 링크 포함)
+            Product 리스트
         """
-        if not COUPANG_ACCESS_KEY or not COUPANG_SECRET_KEY:
-            logger.warning("API 키 미설정 — 검색 건너뜀")
-            return []
+        # 1차: Coupang Partners API
+        if COUPANG_ACCESS_KEY and COUPANG_SECRET_KEY:
+            products = self._search_via_api(keyword, limit)
+            if products:
+                return products
+            logger.warning("API 검색 실패 → 다나와 검색으로 폴백")
 
+        # 2차: 다나와 검색 (curl_cffi — 가장 안정적)
+        products = self._search_via_danawa(keyword, limit)
+        if products:
+            return products
+
+        # 3차: 쿠팡 Playwright 스크래핑
+        logger.info("다나와도 실패 → 쿠팡 Playwright 검색 시도")
+        products = self._search_via_scraping(keyword, limit)
+        if products:
+            return products
+
+        # 4차: 네이버 쇼핑 검색 폴백
+        logger.info("전부 실패 → 네이버 쇼핑 검색 시도")
+        products = self._search_via_naver(keyword, limit)
+        return products
+
+    def _search_via_api(self, keyword: str, limit: int) -> list[Product]:
+        """Coupang Partners 검색 API (기존 방식)"""
         search_path = "/v2/providers/affiliate_open_api/apis/openapi/products/search"
         query_string = f"?keyword={keyword}&limit={limit}"
         full_path = search_path + query_string
@@ -366,16 +405,411 @@ class CoupangScraper:
                     price=f"{item.get('productPrice', 0):,}원",
                     image_urls=[item.get("productImage", "")] if item.get("productImage") else [],
                     description=item.get("productName", ""),
-                    affiliate_link=item.get("productUrl", ""),  # 검색 결과 URL이 이미 제휴 링크
+                    affiliate_link=item.get("productUrl", ""),
                     scraped_at=datetime.now(),
                 )
                 products.append(p)
 
-            logger.info(f"검색 결과: {len(products)}개 상품")
+            logger.info(f"API 검색 결과: {len(products)}개 상품")
             return products
 
         except Exception as e:
-            logger.error(f"상품 검색 실패: {e}")
+            logger.error(f"API 상품 검색 실패: {e}")
+            return []
+
+    def _search_via_danawa(self, keyword: str, limit: int) -> list[Product]:
+        """다나와 가격비교 사이트에서 상품을 검색한다. (curl_cffi — Akamai 우회)
+
+        다나와는 한국 최대 가격비교 사이트로, 쿠팡 포함 다양한 쇼핑몰의 상품을 보여줌.
+        curl_cffi를 사용하여 TLS 핑거프린트를 Chrome으로 위장.
+        """
+        import urllib.parse
+        encoded = urllib.parse.quote(keyword)
+        # 인기순(saveCnt) 정렬
+        search_url = f"https://search.danawa.com/dsearch.php?query={encoded}&tab=goods&sort=saveCnt"
+        logger.info(f"다나와 검색: '{keyword}'")
+
+        try:
+            from curl_cffi import requests as cf_requests
+        except ImportError:
+            logger.warning("curl_cffi 미설치 — 다나와 검색 건너뜀")
+            return []
+
+        try:
+            session = cf_requests.Session(impersonate="chrome131")
+            resp = session.get(search_url, timeout=20)
+
+            if resp.status_code != 200 or len(resp.text) < 5000:
+                logger.warning(f"다나와 검색 HTTP {resp.status_code}, len={len(resp.text)}")
+                return []
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            items = soup.select(".prod_main_info")
+            logger.info(f"다나와 검색 HTML 아이템: {len(items)}개")
+
+            products = []
+            for item in items[:limit]:
+                try:
+                    # 상품명
+                    name_el = item.select_one(".prod_name a, .prod_info .prod_name p a")
+                    title = name_el.get_text(strip=True) if name_el else ""
+
+                    # 가격
+                    price_el = item.select_one(".price_sect, .price_wrap .price em")
+                    price_text = ""
+                    if price_el:
+                        digits = re.sub(r'[^\d]', '', price_el.get_text(strip=True))
+                        if digits:
+                            price_text = f"{int(digits):,}원"
+
+                    # 이미지 — 부모 요소에서 찾기
+                    parent_li = item.parent
+                    img_el = None
+                    if parent_li:
+                        img_el = parent_li.select_one("img.thumb_image, img[class*='thumb']")
+                        if not img_el:
+                            img_el = parent_li.select_one("img")
+                    img_url = ""
+                    if img_el:
+                        img_url = (
+                            img_el.get("data-original") or img_el.get("data-src") or
+                            img_el.get("src") or ""
+                        )
+                        if img_url and not img_url.startswith("http"):
+                            img_url = "https:" + img_url if img_url.startswith("//") else ""
+
+                    # 다나와 상품 URL → 쿠팡 검색 URL로 변환 (제휴 링크 생성용)
+                    link_el = name_el if name_el else item.select_one("a[href]")
+                    danawa_url = link_el.get("href", "") if link_el else ""
+
+                    # 쿠팡 검색 URL 생성 (간편 링크용)
+                    coupang_search = f"https://www.coupang.com/np/search?q={urllib.parse.quote(title)}&channel=user"
+
+                    if not title:
+                        continue
+
+                    products.append(Product(
+                        url=danawa_url,
+                        title=title,
+                        price=price_text or "가격 확인 필요",
+                        image_urls=[img_url] if img_url else [],
+                        description=title,
+                        affiliate_link=coupang_search,  # 쿠팡 검색 URL (간편 링크 변환 가능)
+                        scraped_at=datetime.now(),
+                    ))
+
+                except Exception as e:
+                    logger.debug(f"다나와 상품 파싱 에러: {e}")
+                    continue
+
+            logger.info(f"다나와 검색 결과: {len(products)}개 상품")
+            return products
+
+        except Exception as e:
+            logger.error(f"다나와 검색 실패: {e}")
+            return []
+
+    def _search_via_scraping(self, keyword: str, limit: int) -> list[Product]:
+        """Playwright 브라우저로 쿠팡 검색 페이지를 스크래핑한다. (API 불필요, 403 우회)"""
+        import urllib.parse
+        encoded = urllib.parse.quote(keyword)
+        logger.info(f"쿠팡 Playwright 검색: '{keyword}'")
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("Playwright 미설치 — requests 폴백 시도")
+            return self._search_via_requests(keyword, limit)
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-features=IsolateOrigins,site-per-process",
+                    ],
+                )
+                # 모바일 컨텍스트 (봇 탐지 약함)
+                _MOBILE_UA = (
+                    "Mozilla/5.0 (Linux; Android 14; SM-S918B) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.6367.82 Mobile Safari/537.36"
+                )
+                context = browser.new_context(
+                    user_agent=_MOBILE_UA,
+                    viewport={"width": 412, "height": 915},
+                    locale="ko-KR",
+                    is_mobile=True,
+                    has_touch=True,
+                )
+                page = context.new_page()
+
+                # Stealth
+                page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+                    Object.defineProperty(navigator, 'languages', { get: () => ['ko-KR', 'ko', 'en'] });
+                    window.chrome = { runtime: {} };
+                """)
+
+                # 쿠팡 메인 방문 (쿠키 획득)
+                try:
+                    page.goto("https://m.coupang.com", wait_until="domcontentloaded", timeout=15000)
+                    page.wait_for_timeout(1500)
+                except Exception:
+                    pass
+
+                # 검색 페이지
+                search_url = f"https://m.coupang.com/nm/search?q={encoded}"
+                page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(3000)  # JS 렌더링 대기
+
+                html = page.content()
+                browser.close()
+
+            soup = BeautifulSoup(html, "html.parser")
+            products = []
+
+            # 모바일 쿠팡 검색결과 파싱 — 여러 셀렉터 시도
+            items = soup.select("li.search-product")
+            if not items:
+                items = soup.select("ul.search-product-list > li")
+            if not items:
+                items = soup.select("[class*='search-product']")
+            if not items:
+                # 더 넓은 셀렉터
+                items = soup.select("li[class*='product'], article[class*='product']")
+
+            logger.info(f"Playwright 검색 HTML 아이템: {len(items)}개")
+
+            for item in items[:limit]:
+                try:
+                    # 상품명
+                    title_el = (
+                        item.select_one("div.name, .name, .product-title, .title") or
+                        item.select_one("[class*='name'], [class*='title']")
+                    )
+                    title = title_el.get_text(strip=True) if title_el else ""
+
+                    # 가격
+                    price_el = (
+                        item.select_one("strong.price-value, .price-value") or
+                        item.select_one("[class*='price'] strong, [class*='price'] em") or
+                        item.select_one("[class*='price-value'], [class*='sale-price']")
+                    )
+                    price_text = ""
+                    if price_el:
+                        digits = re.sub(r'[^\d]', '', price_el.get_text(strip=True))
+                        if digits:
+                            price_text = f"{int(digits):,}원"
+
+                    # 이미지
+                    img_el = item.select_one("img")
+                    img_url = ""
+                    if img_el:
+                        img_url = (
+                            img_el.get("src") or img_el.get("data-img-src") or
+                            img_el.get("data-lazy-src") or ""
+                        )
+                        if img_url and not img_url.startswith("http"):
+                            img_url = "https:" + img_url if img_url.startswith("//") else ""
+
+                    # 상품 URL
+                    link_el = item.select_one("a[href*='/products/'], a[href*='/vp/'], a[href]")
+                    product_url = ""
+                    if link_el:
+                        href = link_el.get("href", "")
+                        if href.startswith("/"):
+                            product_url = "https://www.coupang.com" + href
+                        elif href.startswith("http"):
+                            product_url = href
+
+                    if not title:
+                        continue
+
+                    products.append(Product(
+                        url=product_url,
+                        title=title,
+                        price=price_text or "가격 확인 필요",
+                        image_urls=[img_url] if img_url else [],
+                        description=title,
+                        affiliate_link=product_url,
+                        scraped_at=datetime.now(),
+                    ))
+
+                except Exception as e:
+                    logger.debug(f"상품 파싱 에러 (건너뜀): {e}")
+                    continue
+
+            logger.info(f"Playwright 검색 결과: {len(products)}개 상품")
+            return products
+
+        except Exception as e:
+            logger.error(f"Playwright 검색 실패: {e}")
+            return self._search_via_requests(keyword, limit)
+
+    def _search_via_requests(self, keyword: str, limit: int) -> list[Product]:
+        """requests로 쿠팡 검색 (Playwright 없을 때 폴백)"""
+        import urllib.parse
+        encoded = urllib.parse.quote(keyword)
+        search_url = f"https://www.coupang.com/np/search?component=&q={encoded}&channel=user"
+        logger.info(f"쿠팡 requests 검색: '{keyword}'")
+
+        try:
+            try:
+                self._session.get("https://www.coupang.com", timeout=8, allow_redirects=True)
+                time.sleep(0.3)
+            except Exception:
+                pass
+
+            headers = {"Referer": "https://www.coupang.com/"}
+            resp = self._session.get(search_url, timeout=_REQUEST_TIMEOUT,
+                                      headers=headers, allow_redirects=True)
+
+            if resp.status_code != 200:
+                logger.warning(f"쿠팡 검색 HTTP {resp.status_code}")
+                return []
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            products = []
+            items = soup.select("li.search-product, [class*='search-product']")
+
+            for item in items[:limit]:
+                try:
+                    title_el = item.select_one("div.name, .name, [class*='name']")
+                    title = title_el.get_text(strip=True) if title_el else ""
+                    price_el = item.select_one("strong.price-value, [class*='price'] strong")
+                    price_text = ""
+                    if price_el:
+                        digits = re.sub(r'[^\d]', '', price_el.get_text(strip=True))
+                        if digits:
+                            price_text = f"{int(digits):,}원"
+                    img_el = item.select_one("img")
+                    img_url = ""
+                    if img_el:
+                        img_url = img_el.get("src") or img_el.get("data-img-src") or ""
+                        if img_url and not img_url.startswith("http"):
+                            img_url = "https:" + img_url if img_url.startswith("//") else ""
+                    link_el = item.select_one("a[href]")
+                    product_url = ""
+                    if link_el:
+                        href = link_el.get("href", "")
+                        if href.startswith("/"):
+                            product_url = "https://www.coupang.com" + href
+                        elif href.startswith("http"):
+                            product_url = href
+                    if title:
+                        products.append(Product(
+                            url=product_url, title=title, price=price_text or "가격 확인 필요",
+                            image_urls=[img_url] if img_url else [], description=title,
+                            affiliate_link=product_url, scraped_at=datetime.now(),
+                        ))
+                except Exception:
+                    continue
+
+            return products
+        except Exception as e:
+            logger.error(f"requests 검색 실패: {e}")
+            return []
+
+    def _search_via_naver(self, keyword: str, limit: int) -> list[Product]:
+        """네이버 쇼핑 Playwright 검색 (최종 폴백)"""
+        import urllib.parse
+        encoded = urllib.parse.quote(keyword)
+        search_url = f"https://search.shopping.naver.com/search/all?query={encoded}"
+        logger.info(f"네이버 쇼핑 Playwright 검색: '{keyword}'")
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("Playwright 미설치 — 네이버 쇼핑 검색 불가")
+            return []
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                )
+                context = browser.new_context(
+                    user_agent=_USER_AGENT,
+                    viewport={"width": 1280, "height": 800},
+                    locale="ko-KR",
+                )
+                page = context.new_page()
+                page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                """)
+
+                page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(3000)
+
+                html = page.content()
+                browser.close()
+
+            soup = BeautifulSoup(html, "html.parser")
+            products = []
+
+            # __NEXT_DATA__ JSON 파싱
+            script_el = soup.find("script", id="__NEXT_DATA__")
+            if script_el and script_el.string:
+                try:
+                    next_data = json.loads(script_el.string)
+                    props = next_data.get("props", {}).get("pageProps", {})
+                    initial = props.get("initialState", {})
+                    prod_list = initial.get("products", {}).get("list", [])
+
+                    for item in prod_list[:limit]:
+                        item_data = item.get("item", {})
+                        title = item_data.get("productTitle", "").replace("<b>", "").replace("</b>", "")
+                        price_val = item_data.get("price", 0)
+                        price_str = f"{int(price_val):,}원" if price_val else "가격 미정"
+                        img = item_data.get("imageUrl", "")
+                        mall = item_data.get("mallName", "")
+                        prod_url = item_data.get("mallProductUrl", "") or item_data.get("crUrl", "")
+
+                        is_coupang = "coupang" in mall.lower() or "쿠팡" in mall
+                        if title:
+                            products.append(Product(
+                                url=prod_url,
+                                title=f"{'[쿠팡] ' if is_coupang else ''}{title}",
+                                price=price_str,
+                                image_urls=[img] if img else [],
+                                description=f"{title} - {mall}" if mall else title,
+                                affiliate_link="",
+                                scraped_at=datetime.now(),
+                            ))
+                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    logger.debug(f"네이버 JSON 파싱 에러: {e}")
+
+            # HTML 폴백
+            if not products:
+                items = soup.select("[class*='product_item'], [class*='basicList_item']")
+                for item in items[:limit]:
+                    title_el = item.select_one("[class*='title'] a, [class*='name'] a")
+                    price_el = item.select_one("[class*='price'] em, [class*='price'] span")
+                    img_el = item.select_one("img")
+                    title = title_el.get_text(strip=True) if title_el else ""
+                    price_text = ""
+                    if price_el:
+                        digits = re.sub(r'[^\d]', '', price_el.get_text(strip=True))
+                        if digits:
+                            price_text = f"{int(digits):,}원"
+                    img_url = img_el.get("src", "") if img_el else ""
+                    if title:
+                        products.append(Product(
+                            url="", title=title, price=price_text or "가격 미정",
+                            image_urls=[img_url] if img_url else [],
+                            description=title, scraped_at=datetime.now(),
+                        ))
+
+            logger.info(f"네이버 쇼핑 검색 결과: {len(products)}개 상품")
+            return products
+
+        except Exception as e:
+            logger.error(f"네이버 쇼핑 Playwright 검색 실패: {e}")
             return []
 
     # ──────────────────────────────────────────────
