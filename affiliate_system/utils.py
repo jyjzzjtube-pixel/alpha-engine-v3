@@ -68,3 +68,27 @@ def ensure_dir(path: Path) -> Path:
     """Create directory if not exists, return path."""
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def send_telegram(message: str) -> None:
+    """텔레그램 봇으로 메시지를 전송한다.
+
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID가 .env에 설정되어 있어야 한다.
+    실패 시 조용히 무시 (알림은 보조 기능).
+    """
+    try:
+        import requests
+        from affiliate_system.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+            return
+
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message[:4096],  # 텔레그램 메시지 최대 4096자
+            "parse_mode": "HTML",
+        }
+        requests.post(url, json=payload, timeout=10)
+    except Exception:
+        pass

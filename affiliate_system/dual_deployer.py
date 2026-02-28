@@ -44,9 +44,9 @@ from affiliate_system.models import (
     RenderConfig, PLATFORM_PRESETS,
     CampaignStatus,
 )
-from affiliate_system.utils import setup_logger, ensure_dir
+from affiliate_system.utils import setup_logger, ensure_dir, send_telegram
 
-__all__ = ["DualDeployer", "ImageLaunderer"]
+__all__ = ["DualDeployer", "ImageLaunderer", "VideoExtractor", "AliScraper"]
 
 log = setup_logger("dual_deployer", "dual_deployer.log")
 
@@ -233,7 +233,375 @@ class ImageLaunderer:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 2. Playwright 기반 3플랫폼 업로더
+# 2. 도우인/틱톡 영상 추출기 (yt-dlp 기반)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class VideoExtractor:
+    """도우인(Douyin), 틱톡(TikTok), YouTube 등 영상 추출기.
+
+    yt-dlp의 1864개 추출기를 활용하여 거의 모든 플랫폼에서 영상을 다운로드한다.
+    워터마크 제거, 최고 화질 선택, 메타데이터 제거를 자동 수행.
+    """
+
+    SUPPORTED_PLATFORMS = {
+        "douyin": ["douyin.com", "v.douyin.com"],
+        "tiktok": ["tiktok.com", "vm.tiktok.com"],
+        "youtube": ["youtube.com", "youtu.be"],
+        "instagram": ["instagram.com"],
+        "facebook": ["facebook.com", "fb.watch"],
+        "twitter": ["twitter.com", "x.com"],
+        "bilibili": ["bilibili.com"],
+    }
+
+    def __init__(self, output_dir: Optional[str] = None):
+        self.output_dir = Path(output_dir) if output_dir else (
+            WORK_DIR / "extracted_videos"
+        )
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        log.info("VideoExtractor 초기화 - 출력: %s", self.output_dir)
+
+    def detect_platform(self, url: str) -> str:
+        """URL에서 플랫폼을 감지한다."""
+        url_lower = url.lower()
+        for platform, domains in self.SUPPORTED_PLATFORMS.items():
+            for domain in domains:
+                if domain in url_lower:
+                    return platform
+        return "unknown"
+
+    def extract_video(
+        self,
+        url: str,
+        filename: str = None,
+        remove_watermark: bool = True,
+        max_resolution: int = 1920,
+    ) -> Optional[str]:
+        """URL에서 영상을 추출한다.
+
+        Args:
+            url: 영상 URL (도우인, 틱톡, 유튜브 등)
+            filename: 저장 파일명 (없으면 자동)
+            remove_watermark: 워터마크 제거 시도 (도우인/틱톡)
+            max_resolution: 최대 해상도
+
+        Returns:
+            다운로드된 영상 파일 경로, 실패 시 None
+        """
+        try:
+            import yt_dlp
+        except ImportError:
+            log.error("yt-dlp 미설치! pip install yt-dlp")
+            return None
+
+        platform = self.detect_platform(url)
+        log.info("영상 추출 시작: %s (%s)", url[:60], platform)
+
+        if not filename:
+            ts = int(time.time())
+            filename = f"{platform}_{ts}"
+
+        output_template = str(self.output_dir / f"{filename}.%(ext)s")
+
+        # yt-dlp 옵션 구성
+        ydl_opts = {
+            "outtmpl": output_template,
+            "format": f"best[height<={max_resolution}]/best",
+            "merge_output_format": "mp4",
+            "quiet": True,
+            "no_warnings": True,
+            # 메타데이터 제거
+            "postprocessors": [
+                {
+                    "key": "FFmpegMetadata",
+                    "add_metadata": False,
+                },
+            ],
+            # 봇 감지 우회
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+                "Referer": url,
+            },
+        }
+
+        # 도우인/틱톡 워터마크 없는 버전 시도
+        if platform in ("douyin", "tiktok") and remove_watermark:
+            ydl_opts["format"] = "best[format_note!=watermarked]/best"
+
+        # 쿠키 파일 있으면 사용 (로그인 필요한 콘텐츠)
+        cookies_path = ROOT / "cookies.txt"
+        if cookies_path.exists():
+            ydl_opts["cookiefile"] = str(cookies_path)
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if info is None:
+                    log.error("영상 정보 추출 실패: %s", url)
+                    return None
+
+                # 다운로드된 파일 찾기
+                downloaded = ydl.prepare_filename(info)
+                # 확장자가 바뀔 수 있으므로 mp4로 확인
+                mp4_path = Path(downloaded).with_suffix(".mp4")
+                if mp4_path.exists():
+                    downloaded = str(mp4_path)
+                elif os.path.exists(downloaded):
+                    pass
+                else:
+                    # glob으로 찾기
+                    import glob
+                    found = glob.glob(str(self.output_dir / f"{filename}.*"))
+                    if found:
+                        downloaded = found[0]
+                    else:
+                        log.error("다운로드 파일 찾기 실패")
+                        return None
+
+                file_size = os.path.getsize(downloaded) / (1024 * 1024)
+                duration = info.get("duration", 0)
+                title = info.get("title", "")[:50]
+                log.info("영상 추출 완료: %s (%.1fMB, %ds) - %s",
+                         Path(downloaded).name, file_size, duration, title)
+                return downloaded
+
+        except Exception as e:
+            log.error("영상 추출 실패 (%s): %s", platform, e)
+            return None
+
+    def extract_douyin(self, url: str, filename: str = None) -> Optional[str]:
+        """도우인 영상 전용 추출 (워터마크 제거 최적화)."""
+        return self.extract_video(url, filename=filename, remove_watermark=True)
+
+    def extract_tiktok(self, url: str, filename: str = None) -> Optional[str]:
+        """틱톡 영상 전용 추출."""
+        return self.extract_video(url, filename=filename, remove_watermark=True)
+
+    def extract_batch(self, urls: list[str]) -> list[str]:
+        """여러 URL에서 영상을 일괄 추출한다."""
+        results = []
+        for i, url in enumerate(urls):
+            log.info("배치 추출 [%d/%d]: %s", i + 1, len(urls), url[:60])
+            path = self.extract_video(url)
+            if path:
+                results.append(path)
+            time.sleep(random.uniform(2, 5))  # 봇 감지 회피 딜레이
+        log.info("배치 추출 완료: %d/%d 성공", len(results), len(urls))
+        return results
+
+    def get_video_info(self, url: str) -> Optional[dict]:
+        """영상 메타정보만 추출한다 (다운로드 없이).
+
+        Returns:
+            {"title", "duration", "view_count", "thumbnail", "uploader", "platform"}
+        """
+        try:
+            import yt_dlp
+            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info:
+                    return {
+                        "title": info.get("title", ""),
+                        "duration": info.get("duration", 0),
+                        "view_count": info.get("view_count", 0),
+                        "thumbnail": info.get("thumbnail", ""),
+                        "uploader": info.get("uploader", ""),
+                        "platform": self.detect_platform(url),
+                        "url": url,
+                    }
+        except Exception as e:
+            log.warning("영상 정보 추출 실패: %s", e)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 3. 알리익스프레스/1688 소싱 (기본 스크래퍼)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class AliScraper:
+    """알리익스프레스/1688 상품 스크래퍼.
+
+    Playwright로 상품 페이지를 렌더링하고 정보를 추출한다.
+    """
+
+    SUPPORTED = {
+        "aliexpress": ["aliexpress.com", "ko.aliexpress.com"],
+        "1688": ["1688.com"],
+    }
+
+    def detect_platform(self, url: str) -> str:
+        """URL 플랫폼 감지."""
+        url_lower = url.lower()
+        for platform, domains in self.SUPPORTED.items():
+            for domain in domains:
+                if domain in url_lower:
+                    return platform
+        return "unknown"
+
+    @staticmethod
+    def is_ali_url(url: str) -> bool:
+        """알리/1688 URL인지 확인."""
+        url_lower = url.lower()
+        return any(d in url_lower for d in [
+            "aliexpress.com", "1688.com"
+        ])
+
+    def scrape_product(self, url: str) -> Product:
+        """알리/1688 상품 정보를 스크래핑한다.
+
+        Args:
+            url: 상품 URL
+
+        Returns:
+            Product 객체
+        """
+        platform = self.detect_platform(url)
+        log.info("알리/1688 스크래핑: %s (%s)", url[:60], platform)
+
+        # 1차: requests + BeautifulSoup (빠름)
+        product = self._scrape_requests(url)
+        if product and product.title:
+            return product
+
+        # 2차: Playwright (JS 렌더링 필요시)
+        product = self._scrape_playwright(url)
+        if product and product.title:
+            return product
+
+        # 폴백
+        return Product(
+            url=url,
+            title=url.split("/")[-1][:50],
+            description="",
+            scraped_at=datetime.now(),
+        )
+
+    def _scrape_requests(self, url: str) -> Optional[Product]:
+        """requests로 기본 스크래핑."""
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+            }
+            resp = requests.get(url, headers=headers, timeout=20)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            title = ""
+            price = ""
+            image_urls = []
+            description = ""
+
+            # OG 태그
+            og_title = soup.find("meta", property="og:title")
+            if og_title:
+                title = og_title.get("content", "")
+
+            og_desc = soup.find("meta", property="og:description")
+            if og_desc:
+                description = og_desc.get("content", "")
+
+            og_image = soup.find("meta", property="og:image")
+            if og_image and og_image.get("content"):
+                image_urls.append(og_image["content"])
+
+            # 가격 추출 시도
+            price_el = soup.select_one(
+                "[class*='price'], [class*='Price'], "
+                "[data-spm*='price']"
+            )
+            if price_el:
+                price = price_el.get_text(strip=True)
+
+            if not title:
+                t = soup.find("title")
+                title = t.get_text(strip=True) if t else ""
+
+            # 추가 이미지
+            for img in soup.select("img[src*='alicdn'], img[src*='1688']"):
+                src = img.get("src", "")
+                if src and src not in image_urls and "http" in src:
+                    image_urls.append(src)
+                if len(image_urls) >= 8:
+                    break
+
+            if title:
+                return Product(
+                    url=url, title=title, price=price,
+                    image_urls=image_urls, description=description,
+                    scraped_at=datetime.now(),
+                )
+        except Exception as e:
+            log.warning("알리 requests 스크래핑 실패: %s", e)
+        return None
+
+    def _scrape_playwright(self, url: str) -> Optional[Product]:
+        """Playwright로 JS 렌더링 후 스크래핑."""
+        try:
+            from playwright.sync_api import sync_playwright
+
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True)
+                page = browser.new_page(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
+                    ),
+                    locale="ko-KR",
+                )
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                time.sleep(3)
+
+                title = page.title() or ""
+                # OG 태그 추출
+                og_title = page.locator("meta[property='og:title']").first
+                try:
+                    title = og_title.get_attribute("content") or title
+                except Exception:
+                    pass
+
+                # 이미지 추출
+                image_urls = []
+                images = page.locator("img[src*='alicdn'], img[src*='1688']")
+                for i in range(min(images.count(), 8)):
+                    src = images.nth(i).get_attribute("src")
+                    if src:
+                        if src.startswith("//"):
+                            src = "https:" + src
+                        image_urls.append(src)
+
+                # 가격
+                price = ""
+                try:
+                    price_el = page.locator("[class*='price']").first
+                    price = price_el.text_content() or ""
+                except Exception:
+                    pass
+
+                browser.close()
+
+                if title:
+                    return Product(
+                        url=url, title=title, price=price,
+                        image_urls=image_urls,
+                        scraped_at=datetime.now(),
+                    )
+        except Exception as e:
+            log.warning("알리 Playwright 스크래핑 실패: %s", e)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 4. Playwright 기반 3플랫폼 업로더
 # ═══════════════════════════════════════════════════════════════════════════
 
 class PlaywrightUploader:
@@ -904,6 +1272,7 @@ class DualDeployer:
         # 작업 디렉토리
         self._campaign_dir = None
         self._output_dir = ensure_dir(RENDER_OUTPUT_DIR)
+        self._extracted_video = None  # 도우인/틱톡 추출 영상
 
         log.info("DualDeployer 초기화 (manual_review=%s, skip_upload=%s)",
                  manual_review, skip_upload)
@@ -916,6 +1285,7 @@ class DualDeployer:
         persona: str = "",
         browser_images: list[str] = None,
         local_images: list[str] = None,
+        video_urls: list[str] = None,
     ) -> dict:
         """듀얼 배포 풀 파이프라인을 실행한다.
 
@@ -926,6 +1296,7 @@ class DualDeployer:
             persona: AI 페르소나
             browser_images: Chrome에서 캡처한 이미지 URL 리스트
             local_images: 로컬 이미지 파일 경로 리스트
+            video_urls: 도우인/틱톡/유튜브 영상 URL 리스트 (추출용)
 
         Returns:
             {
@@ -956,6 +1327,7 @@ class DualDeployer:
             "product": None,
             "images_raw": [],
             "images_laundered": [],
+            "extracted_videos": [],
             "ai_contents": {},
             "video_paths": {},
             "blog_html": "",
@@ -981,6 +1353,22 @@ class DualDeployer:
 
         if not raw_images:
             print("  [!] 이미지 없음 - 계속 진행 (텍스트만)")
+
+        # ── Step 2.5: 도우인/틱톡 영상 추출 (있으면) ──
+        extracted_videos = []
+        if video_urls:
+            print(f"\n[2.5/7] 도우인/틱톡 영상 추출 ({len(video_urls)}개)...")
+            extractor = VideoExtractor(
+                output_dir=str(self._campaign_dir / "extracted_videos")
+            )
+            extracted_videos = extractor.extract_batch(video_urls)
+            result["extracted_videos"] = extracted_videos
+            print(f"  > 추출 성공: {len(extracted_videos)}개")
+        elif self._extracted_video:
+            # _source_product에서 이미 추출한 영상
+            extracted_videos = [self._extracted_video]
+            result["extracted_videos"] = extracted_videos
+            print(f"\n[2.5/7] 소싱 단계에서 추출된 영상 1개 발견")
 
         # ── Step 3: 이미지 세탁 (EXIF 제거 + 리사이즈) ──
         print("\n[3/7] 이미지 세탁 (EXIF 제거 + 미세 리사이즈)...")
@@ -1067,18 +1455,43 @@ class DualDeployer:
     # ────────────────────────────────────────────
 
     def _source_product(self, input_str: str) -> Product:
-        """쿠팡 URL 또는 키워드로 상품 정보를 소싱한다."""
+        """쿠팡/알리/1688 URL 또는 키워드로 상품 정보를 소싱한다."""
         from affiliate_system.coupang_scraper import CoupangScraper
 
         scraper = CoupangScraper()
 
+        # 쿠팡 URL
         if CoupangScraper.is_coupang_url(input_str):
             log.info("쿠팡 URL 감지 - 스크래핑 + 어필리에이트 링크 생성")
             return scraper.scrape_and_link(input_str)
 
+        # 알리익스프레스/1688 URL
+        if AliScraper.is_ali_url(input_str):
+            log.info("알리/1688 URL 감지 - 스크래핑")
+            ali = AliScraper()
+            return ali.scrape_product(input_str)
+
+        # 도우인/틱톡 URL → 영상 정보 추출
+        extractor = VideoExtractor()
+        platform = extractor.detect_platform(input_str)
+        if platform != "unknown" and input_str.startswith("http"):
+            log.info("%s URL 감지 - 영상 정보 추출", platform)
+            info = extractor.get_video_info(input_str)
+            if info:
+                # 영상 다운로드 + Product 생성
+                video_path = extractor.extract_video(input_str)
+                self._extracted_video = video_path  # 나중에 렌더링에서 사용
+                return Product(
+                    url=input_str,
+                    title=info.get("title", ""),
+                    description=f"[{platform}] {info.get('uploader', '')}",
+                    image_urls=[info.get("thumbnail", "")] if info.get("thumbnail") else [],
+                    scraped_at=datetime.now(),
+                )
+
+        # 일반 URL
         if input_str.startswith("http"):
             log.info("일반 URL 감지 - OG 태그 스크래핑")
-            # 간단한 OG 스크래핑
             try:
                 import requests
                 from bs4 import BeautifulSoup
@@ -1293,8 +1706,8 @@ class DualDeployer:
     ) -> str:
         """네이버 블로그용 HTML을 생성한다."""
         try:
-            from affiliate_system.blog_html_generator import BlogHTMLGenerator
-            gen = BlogHTMLGenerator()
+            from affiliate_system.blog_html_generator import NaverBlogHTMLGenerator
+            gen = NaverBlogHTMLGenerator()
 
             title = blog_content.get("title", product.title)
             body = blog_content.get("body", "")
@@ -1302,13 +1715,28 @@ class DualDeployer:
             cta = blog_content.get("cta", "")
             affiliate_link = product.affiliate_link or ""
 
-            html = gen.generate(
+            # body를 섹션으로 분할 (NaverBlogHTMLGenerator 시그니처에 맞게)
+            body_sections = [s.strip() for s in body.split("\n") if s.strip()]
+            if len(body_sections) < 2:
+                # 한 덩어리면 4개로 분할
+                words = body.split()
+                chunk_size = max(len(words) // 4, 1)
+                body_sections = []
+                for i in range(0, len(words), chunk_size):
+                    body_sections.append(" ".join(words[i:i + chunk_size]))
+
+            # 인트로 = 첫 섹션, 나머지 = 본문 섹션
+            intro = body_sections[0] if body_sections else ""
+            sections = body_sections[1:] if len(body_sections) > 1 else body_sections
+
+            html = gen.generate_blog_html(
                 title=title,
-                body=body,
-                images=images[:7],
-                hashtags=hashtags,
+                intro=intro,
+                body_sections=sections,
+                image_paths=images[:7],
+                coupang_link=affiliate_link,
                 cta_text=cta,
-                affiliate_link=affiliate_link,
+                hashtags=hashtags,
                 disclaimer=COUPANG_DISCLAIMER,
             )
             return html
@@ -1493,6 +1921,8 @@ def main():
                         help="수동 확인 비활성화 (자동 발행)")
     parser.add_argument("--local-images", nargs="+", default=None,
                         help="로컬 이미지 파일 경로")
+    parser.add_argument("--video-urls", nargs="+", default=None,
+                        help="도우인/틱톡/유튜브 영상 URL (추출용)")
 
     args = parser.parse_args()
 
@@ -1508,6 +1938,7 @@ def main():
         brand=args.brand,
         persona=args.persona,
         local_images=args.local_images,
+        video_urls=args.video_urls,
     )
 
     # 텔레그램 리포트
@@ -1516,15 +1947,15 @@ def main():
         title = product.title if product else args.input
         uploads = result.get("upload_results", {})
         ok_count = sum(1 for v in uploads.values() if isinstance(v, dict) and v.get("ok"))
+        extracted = len(result.get("extracted_videos", []))
 
         report = (
             f"듀얼 배포 완료: {title[:30]}\n"
             f"이미지: {len(result.get('images_laundered', []))}개 세탁\n"
-            f"영상: {len(result.get('video_paths', {}))}개 렌더링\n"
+            f"영상 추출: {extracted}개\n"
+            f"영상 렌더링: {len(result.get('video_paths', {}))}개\n"
             f"업로드: {ok_count}/{len(uploads)}개 성공"
         )
-
-        from affiliate_system.utils import send_telegram
         send_telegram(report)
     except Exception:
         pass
