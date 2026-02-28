@@ -58,10 +58,10 @@ log = setup_logger("shopping_shorts", "shopping_shorts.log")
 # ── TTS 설정 ──
 TTS_VOICE = "ko-KR-SunHiNeural"        # 여성 (자연스러운 리뷰 톤)
 TTS_VOICE_MALE = "ko-KR-InJoonNeural"  # 남성
-TTS_RATE = "+20%"                       # 1.2배속 (레퍼런스: 1.2~1.3배)
+TTS_RATE = "+5%"                        # +5% 거의 자연어 속도 (+10%→+5%, 자연스러움 최우선)
 TTS_PITCH = "+0Hz"
 
-# ── 자막 스타일 ──
+# ── 자막 스타일 (레거시, SRT 폴백용) ──
 SUBTITLE_FONT = "Malgun Gothic"         # 윈도우 기본 한글 폰트
 SUBTITLE_FONTSIZE = 52                  # 쇼츠 자막 크기
 SUBTITLE_COLOR = "&Hffffff"             # 흰색
@@ -69,6 +69,29 @@ SUBTITLE_OUTLINE = 3                    # 외곽선 두께
 SUBTITLE_OUTLINE_COLOR = "&H000000"     # 검정 외곽선
 SUBTITLE_SHADOW = 1                     # 그림자
 SUBTITLE_MARGIN_V = 80                  # 하단 여백
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 레퍼런스 스타일 설정 (풀프레임 + 상단 자막 오버레이 + 인트로 타이틀)
+# 레퍼런스: @살림남 The Life, @리뷰몽키 (조회수 24만~47만)
+# 스타일: 풀프레임 영상 + 상단 1/3 흰색 볼드 자막 + 2초 인트로 타이틀(흰+노랑)
+# ═══════════════════════════════════════════════════════════════════════════
+HQ_CANVAS_W = 1080              # 캔버스 가로
+HQ_CANVAS_H = 1920              # 캔버스 세로 (9:16)
+
+# ── 본편 자막 (상단 1/4 오버레이, 배경 없이 영상 위 직접 표시) ──
+HQ_FONT = "Malgun Gothic"       # 한글 기본 폰트 (안정적, 모든 PC 보유)
+HQ_SUBTITLE_FONTSIZE = 60       # 자막 크기 (56→60, 가독성 강화)
+HQ_SUBTITLE_OUTLINE = 6         # 두꺼운 다크 아웃라인 (5→6)
+HQ_SUBTITLE_SHADOW = 2          # 드롭 쉐도우 (미묘하게)
+HQ_SUBTITLE_MARGIN_TOP = 380    # 상단에서의 거리 (px) — 화면 1/5 지점 (320→380)
+
+# ── 인트로 타이틀 (0~2초, =썸네일) ──
+HQ_INTRO_DURATION = 2.0         # 인트로 타이틀 표시 시간 (초)
+HQ_INTRO_TITLE_SIZE = 85        # 메인 타이틀 폰트 크기 (초대형, 80→85)
+HQ_INTRO_TITLE_OUTLINE = 8      # 매우 두꺼운 아웃라인 (7→8)
+HQ_INTRO_TITLE_SHADOW = 3       # 뚜렷한 그림자
+HQ_INTRO_HOOK_SIZE = 32         # 후크 텍스트 크기 (30→32)
+HQ_YELLOW_COLOR = "&H0000FFFF"  # 순수 노란색 (BGR: 00FFFF = RGB #FFFF00, 더 선명)
 
 
 class ShoppingScriptGenerator:
@@ -663,8 +686,21 @@ class ShoppingFFmpegComposer:
         bgm_enabled: bool = True,
         bgm_volume: float = 0.10,
         bgm_genre: str = "lofi",
+        # ── 레퍼런스 스타일 파라미터 ──
+        product_name: str = "",
+        word_timings: list = None,
+        hq_mode: bool = True,
+        hook_text: str = "",
+        intro_lines: list = None,
     ) -> str:
-        """소스영상 + TTS + BGM + 자막 합성
+        """소스영상 + TTS + BGM + 자막 합성 — 레퍼런스 스타일
+
+        레퍼런스 모드 (기본 ON):
+        - 풀프레임: 영상이 1080x1920 전체를 채움 (블랙바 없음)
+        - 인트로: 0~2초 대형 타이틀 (흰+노랑+흰)
+        - 자막: 상단 1/3에 흰색 볼드 + 두꺼운 아웃라인 오버레이
+        - 오디오: 원본 뮤트 → TTS 더빙 + BGM으로 완전 교체
+        - anti-duplicate 비활성 (wash_video()가 이미 처리)
 
         Args:
             source_video: 소스 영상 파일
@@ -672,11 +708,16 @@ class ShoppingFFmpegComposer:
             srt_file: SRT 자막 파일
             output_path: 출력 파일
             max_duration: 최대 길이 (초)
-            keep_original_audio: 원본 오디오 유지 여부
+            keep_original_audio: 원본 오디오 유지 (기본 False=뮤트)
             original_audio_volume: 원본 오디오 볼륨 (0.0~1.0)
             bgm_enabled: BGM 배경음 추가 여부
             bgm_volume: BGM 볼륨 (0.0~1.0)
             bgm_genre: BGM 장르 (lofi, upbeat, chill)
+            product_name: 상품명 (인트로 타이틀 + 자막용)
+            word_timings: TTS 단어별 타이밍 (자막 싱크용)
+            hq_mode: 레퍼런스 스타일 모드 (기본 True)
+            hook_text: 인트로 후크 텍스트 (빈 값이면 자동 생성)
+            intro_lines: 인트로 타이틀 3줄 (빈 값이면 상품명에서 자동)
 
         Returns:
             출력 파일 경로
@@ -685,8 +726,6 @@ class ShoppingFFmpegComposer:
 
         # 1. 소스 영상 정보 확인
         src_info = self._probe_video(source_video)
-        src_w = src_info.get("width", 1080)
-        src_h = src_info.get("height", 1920)
         src_dur = src_info.get("duration", 60.0)
 
         # TTS 길이 확인
@@ -696,14 +735,14 @@ class ShoppingFFmpegComposer:
         final_dur = min(tts_dur + 1.5, src_dur, max_duration)
 
         log.info(
-            "합성 시작: source=%.1fs, tts=%.1fs, final=%.1fs, encoder=%s, bgm=%s",
-            src_dur, tts_dur, final_dur, self.encoder,
+            "합성 시작: source=%.1fs, tts=%.1fs, final=%.1fs, encoder=%s, hq=%s, bgm=%s",
+            src_dur, tts_dur, final_dur, self.encoder, hq_mode,
             f"{bgm_genre}@{bgm_volume}" if bgm_enabled else "OFF"
         )
 
         # 한글 경로 문제 회피: 소스/TTS를 temp에 복사
         import shutil
-        temp_dir = tempfile.mkdtemp(prefix="shorts_")
+        temp_dir = tempfile.mkdtemp(prefix="shorts_hq_")
         temp_src = os.path.join(temp_dir, "source.mp4")
         temp_tts = os.path.join(temp_dir, "tts.mp3")
         shutil.copy2(source_video, temp_src)
@@ -715,7 +754,6 @@ class ShoppingFFmpegComposer:
             bgm_dir = Path(__file__).parent / "bgm"
             bgm_file = bgm_dir / f"{bgm_genre}.wav"
             if not bgm_file.exists():
-                # 장르 폴백
                 fallback_map = {"cinematic": "chill", "dramatic": "chill",
                                 "energetic": "upbeat", "trendy": "upbeat"}
                 alt = fallback_map.get(bgm_genre, "lofi")
@@ -727,171 +765,477 @@ class ShoppingFFmpegComposer:
             else:
                 log.warning("BGM 파일 미발견, BGM 없이 합성")
 
-        # 2. FFmpeg 필터 체인 구성
-        vf_filters = self._build_video_filter(src_w, src_h, srt_file)
+        # 2. ASS 자막 생성 (인트로 타이틀 + 상단 자막 오버레이)
+        temp_ass = None
+        if hq_mode and (word_timings or srt_file or product_name):
+            try:
+                ass_content = self._generate_typing_ass(
+                    word_timings=word_timings,
+                    srt_file=srt_file,
+                    product_name=product_name,
+                    total_duration=final_dur,
+                    hook_text=hook_text,
+                    intro_lines=intro_lines,
+                )
+                temp_ass = os.path.join(temp_dir, "typing.ass")
+                with open(temp_ass, 'w', encoding='utf-8-sig') as f:
+                    f.write(ass_content)
+                log.info("레퍼런스 스타일 ASS 생성 완료: %s", temp_ass)
+            except Exception as e:
+                log.warning("ASS 자막 생성 실패, SRT 폴백: %s", e)
+                temp_ass = None
 
-        # 3. FFmpeg 명령 구성
+        # 3. 비디오 필터 체인 구성
+        if hq_mode:
+            vf_chain = self._build_hq_video_filter(temp_ass, srt_file, temp_dir)
+        else:
+            vf_chain = self._build_legacy_video_filter(
+                src_info.get("width", 1080), src_info.get("height", 1920), srt_file
+            )
+
+        # 4. FFmpeg filter_complex 구성 (비디오 + 오디오 통합)
+        fc_parts = []
+
+        # 비디오 체인
+        fc_parts.append(f"[0:v]{vf_chain}[vout]")
+
+        # 오디오 체인
+        audio_out = "[aout]"
+        if temp_bgm:
+            if keep_original_audio:
+                fc_parts.append(f"[0:a]volume={original_audio_volume}[orig]")
+                fc_parts.append(f"[1:a]volume=1.0[tts]")
+                fc_parts.append(
+                    f"[2:a]volume={bgm_volume},"
+                    f"afade=t=out:st={max(0, final_dur - 2.0):.1f}:d=2.0[bgm]"
+                )
+                fc_parts.append(
+                    f"[orig][tts][bgm]amix=inputs=3:duration=first:dropout_transition=2{audio_out}"
+                )
+            else:
+                fc_parts.append(f"[1:a]volume=1.0[tts]")
+                fc_parts.append(
+                    f"[2:a]volume={bgm_volume},"
+                    f"afade=t=out:st={max(0, final_dur - 2.0):.1f}:d=2.0[bgm]"
+                )
+                fc_parts.append(
+                    f"[tts][bgm]amix=inputs=2:duration=first:dropout_transition=2{audio_out}"
+                )
+        elif keep_original_audio:
+            fc_parts.append(f"[0:a]volume={original_audio_volume}[bg]")
+            fc_parts.append(f"[1:a]volume=1.0[tts]")
+            fc_parts.append(f"[bg][tts]amix=inputs=2:duration=first{audio_out}")
+        else:
+            audio_out = None  # TTS만 직접 매핑
+
+        # 5. FFmpeg 명령 구성
         cmd = ['ffmpeg', '-y']
-
-        # 입력: 소스 영상 + TTS 오디오 + BGM (선택)
         cmd += ['-i', temp_src]       # [0] 소스 영상
         cmd += ['-i', temp_tts]       # [1] TTS 오디오
         if temp_bgm:
             cmd += ['-i', temp_bgm]   # [2] BGM 오디오
 
-        # 비디오 필터 (비어있으면 넣지 않음)
-        if vf_filters:
-            cmd += ['-vf', vf_filters]
+        cmd += ['-filter_complex', ';'.join(fc_parts)]
+        cmd += ['-map', '[vout]']
 
-        # 오디오 믹싱
-        if temp_bgm:
-            # TTS + BGM 믹스 (+ 원본 오디오 선택적)
-            if keep_original_audio:
-                cmd += [
-                    '-filter_complex',
-                    f'[0:a]volume={original_audio_volume}[orig];'
-                    f'[1:a]volume=1.0[tts];'
-                    f'[2:a]volume={bgm_volume},afade=t=out:st={final_dur - 2.0}:d=2.0[bgm];'
-                    f'[orig][tts][bgm]amix=inputs=3:duration=first:dropout_transition=2[aout]',
-                    '-map', '0:v',
-                    '-map', '[aout]',
-                ]
-            else:
-                cmd += [
-                    '-filter_complex',
-                    f'[1:a]volume=1.0[tts];'
-                    f'[2:a]volume={bgm_volume},afade=t=out:st={final_dur - 2.0}:d=2.0[bgm];'
-                    f'[tts][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]',
-                    '-map', '0:v',
-                    '-map', '[aout]',
-                ]
-        elif keep_original_audio:
-            # 원본 + TTS 믹스 (BGM 없음)
-            cmd += [
-                '-filter_complex',
-                f'[0:a]volume={original_audio_volume}[bg];'
-                f'[1:a]volume=1.0[tts];'
-                f'[bg][tts]amix=inputs=2:duration=first[aout]',
-                '-map', '0:v',
-                '-map', '[aout]',
-            ]
+        if audio_out:
+            cmd += ['-map', audio_out]
         else:
-            # TTS만 사용 (원본 오디오 무시, BGM 없음)
-            cmd += [
-                '-map', '0:v',
-                '-map', '1:a',
-            ]
+            cmd += ['-map', '1:a']
 
-        # 인코딩 설정
+        # 인코딩 설정 (HQ 최적화)
         cmd += ['-c:v', self.encoder]
         if self.encoder == 'h264_nvenc':
-            cmd += ['-preset', FFMPEG_PRESET, '-rc', 'vbr', '-cq', FFMPEG_CRF]
+            cmd += ['-preset', 'p7', '-rc', 'vbr', '-cq', '16']  # p4→p7, CRF 18→16
         elif self.encoder == 'h264_amf':
             cmd += ['-quality', 'quality']
         else:
-            # libx264: CRF + maxrate 조합 (VBV constrained quality)
-            # CRF만 쓰면 정적 프레임에서 비트레이트 너무 낮아짐
-            cmd += ['-preset', 'slow', '-crf', '15']  # CRF 15 = 고품질
+            cmd += ['-preset', 'slow', '-crf', '15']
 
         cmd += [
             '-c:a', 'aac',
             '-b:a', '256k',
-            '-ar', '44100',     # 44.1kHz 업샘플 (TTS 24kHz → 고품질)
-            '-ac', '2',         # 스테레오
-            '-b:v', '18M',
-            '-maxrate', '22M',
-            '-bufsize', '36M',
+            '-ar', '44100',
+            '-ac', '2',
+            '-b:v', '20M',      # 18M→20M 비트레이트 향상
+            '-maxrate', '25M',   # 22M→25M
+            '-bufsize', '40M',   # 36M→40M
             '-t', str(final_dur),
             '-movflags', '+faststart',
             '-shortest',
             output_path,
         ]
 
-        log.info("FFmpeg 명령: %s", ' '.join(cmd[:10]) + '...')
+        log.info("FFmpeg HQ 명령: %s", ' '.join(cmd[:12]) + '...')
 
-        # 4. 실행
+        # 6. 실행
         result = subprocess.run(
-            cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300,
+            cmd, capture_output=True, text=True,
+            encoding='utf-8', errors='replace', timeout=600,
         )
 
+        # 정리
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
         if result.returncode != 0:
-            log.error("FFmpeg 실패: %s", result.stderr[-500:] if result.stderr else "")
-            # 자막 없이 재시도
-            return self._compose_without_srt(
-                source_video, tts_audio, output_path, final_dur
+            log.error("FFmpeg HQ 실패: %s", result.stderr[-800:] if result.stderr else "")
+            # 레거시 모드로 폴백
+            return self._compose_legacy_fallback(
+                source_video, tts_audio, srt_file, output_path, final_dur,
+                keep_original_audio, original_audio_volume,
+                bgm_enabled, bgm_volume, bgm_genre,
             )
 
         if os.path.exists(output_path):
             sz = os.path.getsize(output_path) / (1024 * 1024)
-            log.info("합성 완료: %s (%.1fMB)", output_path, sz)
+            log.info("✅ HQ 합성 완료: %s (%.1fMB)", output_path, sz)
             return output_path
 
         return ""
 
-    def _build_video_filter(
-        self, src_w: int, src_h: int, srt_file: str
-    ) -> str:
-        """비디오 필터 체인 구성 (9:16 크롭 + 중복도ZERO + 자막)
+    # ═══════════════════════════════════════════════════════════════════════
+    # HQ 3단 레이아웃 메서드
+    # ═══════════════════════════════════════════════════════════════════════
 
-        중복도 ZERO 편집 기법 (튜브렌즈 3탄):
-        - 미세 확대 (1.03~1.08배) → pHash 변경
-        - 미러링 (50% 확률) → 완전히 다른 영상으로 인식
-        - 미세 색상 보정 → 채도/밝기 미세 변경
+    def _build_hq_video_filter(
+        self, ass_file: str = None, srt_file: str = None, temp_dir: str = None,
+    ) -> str:
+        """레퍼런스 스타일 비디오 필터 (풀프레임 + 자막 오버레이)
+
+        구조:
+        ┌──────────────────────┐ ← y=0
+        │                      │
+        │    풀프레임 영상      │ 1920px
+        │   (1080x1920 꽉채움) │ ← 블랙바 없음!
+        │                      │
+        │  [상단 자막 오버레이] │ ← y≈320 (1/6 지점)
+        │                      │
+        └──────────────────────┘ ← y=1920
+
+        레퍼런스: @살림남 — 영상이 전체 프레임을 채우고,
+        자막은 상단 영역에 흰색 볼드+아웃라인으로 직접 오버레이
         """
         filters = []
 
-        # 9:16 비율로 크롭/스케일
-        target_w, target_h = 1080, 1920
-        src_ratio = src_w / src_h
-        target_ratio = target_w / target_h
+        # 1. 소스 영상을 풀프레임으로 스케일 (커버 모드)
+        filters.append(
+            f"scale={HQ_CANVAS_W}:{HQ_CANVAS_H}:"
+            f"force_original_aspect_ratio=increase"
+        )
+        # 2. 정확히 9:16 크기로 크롭 (넘치는 부분 잘라냄)
+        filters.append(f"crop={HQ_CANVAS_W}:{HQ_CANVAS_H}")
 
-        ratio_diff = abs(src_ratio - target_ratio)
-        if ratio_diff > 0.01:  # 비율이 다를 때만 크롭
-            if src_ratio > target_ratio:
-                # 가로가 더 넓음 → 좌우 크롭
-                filters.append(f"crop=ih*{target_w}/{target_h}:ih")
+        # 3. ASS 자막 적용 (인트로 타이틀 + 본편 자막)
+        if ass_file and os.path.exists(ass_file):
+            ass_escaped = ass_file.replace('\\', '/').replace(':', '\\:')
+            filters.append(f"ass='{ass_escaped}'")
+        elif srt_file:
+            # ASS 실패 시 SRT 폴백 (상단 자막)
+            import shutil
+            temp_srt = os.path.join(
+                temp_dir or tempfile.gettempdir(), "shorts_sub.srt"
+            )
+            shutil.copy2(srt_file, temp_srt)
+            srt_escaped = temp_srt.replace('\\', '/').replace(':', '\\:')
+            subtitle_style = (
+                f"FontName={HQ_FONT},"
+                f"FontSize={HQ_SUBTITLE_FONTSIZE},"
+                f"PrimaryColour=&Hffffff,"
+                f"OutlineColour=&H000000,"
+                f"Outline={HQ_SUBTITLE_OUTLINE},"
+                f"Shadow={HQ_SUBTITLE_SHADOW},"
+                f"MarginV={HQ_SUBTITLE_MARGIN_TOP},"
+                f"Bold=1,"
+                f"Alignment=8"  # 8 = top-center (상단 중앙)
+            )
+            filters.append(
+                f"subtitles='{srt_escaped}':force_style='{subtitle_style}'"
+            )
+
+        return ','.join(filters)
+
+    def _generate_typing_ass(
+        self,
+        word_timings: list = None,
+        srt_file: str = None,
+        product_name: str = "",
+        total_duration: float = 30.0,
+        hook_text: str = "",
+        intro_lines: list = None,
+    ) -> str:
+        """ASS 자막 생성 — 레퍼런스 스타일 (인트로 타이틀 + 상단 자막)
+
+        레퍼런스(@살림남) 분석 결과:
+        1. 인트로 (0~2초): 대형 타이틀 (흰+노랑+흰 3줄) + 작은 후크 텍스트
+        2. 본편 (2초~): 상단 1/3 위치에 흰색 볼드 자막 (배경 없이 오버레이)
+
+        Args:
+            word_timings: TTS 단어별 타이밍 [{offset, duration, text}, ...]
+            srt_file: SRT 파일 경로 (word_timings 없을 때 폴백)
+            product_name: 상품명 (인트로 타이틀용)
+            hook_text: 후크 텍스트 (인트로 상단 작은 글씨)
+            intro_lines: 인트로 타이틀 3줄 리스트 (없으면 상품명에서 자동 생성)
+            total_duration: 총 영상 길이
+
+        Returns:
+            ASS 파일 내용 문자열
+        """
+        events = []
+        intro_end = HQ_INTRO_DURATION
+
+        # ═══ 인트로 타이틀 (0~2초) — 썸네일/첫인상 ═══
+        if product_name:
+            title = self._clean_title(product_name, max_len=40)
+            intro_end_t = self._ass_time(intro_end)
+
+            # 인트로 3줄 텍스트 생성 (사용자 지정 또는 자동)
+            if intro_lines and len(intro_lines) >= 2:
+                lines = intro_lines
             else:
-                # 세로가 더 넓음 → 상하 크롭
-                filters.append(f"crop=iw:iw*{target_h}/{target_w}")
+                lines = self._generate_intro_lines(title)
 
-        # 해상도가 다를 때만 스케일
-        if src_w != target_w or src_h != target_h:
-            filters.append(f"scale={target_w}:{target_h}")
+            # 후크 텍스트 (상단 작은 글씨 + 반투명 배경)
+            if hook_text:
+                hook = hook_text
+            else:
+                hook = f"지금 쿠팡에서 확인해보세요! 🔥"
+            # {\an8} = 상단 중앙, \pos로 정확한 위치 지정
+            # \bord0 + \shad0 + \3c&H80000000 = 반투명 배경 박스 효과
+            events.append(
+                f"Dialogue: 2,0:00:00.00,{intro_end_t},IntroHook,,0,0,0,,"
+                f"{{\\an8\\pos(540,280)}}{hook}"
+            )
 
-        # ── 중복도 ZERO 편집 (anti-duplicate) ──
-        if self.anti_duplicate:
-            # 1. 미세 확대 (1.03~1.08배) — 중앙 크롭으로 pHash 변경
-            zoom = random.uniform(1.03, 1.08)
-            crop_w = int(target_w / zoom)
-            crop_h = int(target_h / zoom)
-            filters.append(f"crop={crop_w}:{crop_h}")
-            filters.append(f"scale={target_w}:{target_h}")
-            log.info("중복도ZERO: 미세확대 %.2fx", zoom)
+            # 메인 타이틀 (3줄: 흰-노랑-흰)
+            y_start = 440  # 타이틀 시작 Y (400→440, 좀 더 아래로)
+            line_gap = 120  # 줄 간격 (100→120, 더 넓게)
+            for i, line in enumerate(lines[:3]):
+                y_pos = y_start + (i * line_gap)
+                if i == 1:
+                    # 2번째 줄: 노란색 강조 (레퍼런스 핵심!)
+                    # \\1c 로 PrimaryColour를 직접 노란색으로 오버라이드
+                    events.append(
+                        f"Dialogue: 2,0:00:00.00,{intro_end_t},IntroYellow,,0,0,0,,"
+                        f"{{\\an5\\pos(540,{y_pos})\\1c{HQ_YELLOW_COLOR}}}{line}"
+                    )
+                else:
+                    events.append(
+                        f"Dialogue: 2,0:00:00.00,{intro_end_t},IntroWhite,,0,0,0,,"
+                        f"{{\\an5\\pos(540,{y_pos})}}{line}"
+                    )
 
-            # 2. 미러링 (50% 확률)
-            if random.random() > 0.5:
-                filters.append("hflip")
-                log.info("중복도ZERO: 미러링(좌우반전) 적용")
+        # ═══ 본편 자막 (인트로 이후~끝) — 상단 오버레이 ═══
+        # \pos(540, Y) 으로 정확한 위치 지정 (스타일 MarginV 무시 방지)
+        sub_y = HQ_SUBTITLE_MARGIN_TOP  # 상단에서의 거리
 
-            # 3. 역재생 (20% 확률) — 튜브렌즈 3탄: 중복도 대폭 낮춤
-            if random.random() < 0.20:
-                filters.append("reverse")
-                log.info("중복도ZERO: 역재생 적용")
+        if word_timings:
+            # 단어 타이밍으로 싱크 자막 생성
+            chunks = self._group_words_to_chunks(word_timings)
+            for chunk in chunks:
+                start = chunk[0]["offset"]
+                end = chunk[-1]["offset"] + chunk[-1]["duration"] + 0.15
+                # 자막 텍스트 결합
+                text_parts = []
+                for i, wt in enumerate(chunk):
+                    text_parts.append(wt["text"])
+                sub_text = ' '.join(text_parts)
+                events.append(
+                    f"Dialogue: 0,{self._ass_time(start)},"
+                    f"{self._ass_time(end)},Sub,,0,0,0,,"
+                    f"{{\\an8\\pos(540,{sub_y})}}{sub_text}"
+                )
+        elif srt_file and os.path.exists(srt_file):
+            # SRT 파싱 폴백
+            srt_entries = self._parse_srt(srt_file)
+            for entry in srt_entries:
+                events.append(
+                    f"Dialogue: 0,{self._ass_time(entry['start'])},"
+                    f"{self._ass_time(entry['end'])},Sub,,0,0,0,,"
+                    f"{{\\an8\\pos(540,{sub_y})}}{entry['text']}"
+                )
 
-            # 4. 미세 색상 보정 (채도/밝기 미세 변경)
-            sat = random.uniform(0.95, 1.08)   # 채도 ±5~8%
-            bri = random.uniform(-0.02, 0.03)  # 밝기 미세 조정
-            con = random.uniform(0.97, 1.05)   # 대비 미세 조정
-            filters.append(f"eq=brightness={bri:.3f}:contrast={con:.2f}:saturation={sat:.2f}")
-            log.info("중복도ZERO: 색보정 sat=%.2f bri=%.3f con=%.2f", sat, bri, con)
+        return self._ass_header(total_duration) + '\n'.join(events) + '\n'
 
-            # 5. 프레임 속도 미세 변동 (0.97~1.03배) — 추가 핑거프린트 변경
-            speed = random.uniform(0.97, 1.03)
-            if abs(speed - 1.0) > 0.005:
-                filters.append(f"setpts={1/speed:.4f}*PTS")
-                log.info("중복도ZERO: 속도 미세변동 %.3fx", speed)
+    def _generate_intro_lines(self, product_name: str) -> list:
+        """상품명에서 인트로 타이틀 3줄 자동 생성
 
-        # SRT 자막 번인 — 한글 경로 문제 회피: temp 디렉토리에 복사
+        패턴 (레퍼런스):
+        - "가족 건강 챙기는 / 해외 필수 품목 / BEST 3"
+        - "쿠팡에 찾은 / 후기로 증명한 / BEST 5"
+
+        우리 패턴:
+        - "쿠팡에서 찾은" / "{상품명}" / "리뷰 BEST"
+        """
+        title = self._clean_title(product_name, max_len=16)
+        return [
+            "쿠팡에서 찾은",
+            title,
+            "리뷰 BEST 🔥",
+        ]
+
+    def _ass_header(self, total_duration: float = 30.0) -> str:
+        """ASS 파일 헤더 — 레퍼런스 스타일
+
+        스타일 구성:
+        1. Sub: 본편 자막 (상단 1/3, 흰색 볼드 + 다크 아웃라인)
+        2. IntroWhite: 인트로 메인 타이틀 흰색 줄
+        3. IntroYellow: 인트로 강조 줄 (노란색)
+        4. IntroHook: 인트로 후크 텍스트 (작은 흰색)
+        """
+        # 폰트: NanumSquareRound → Malgun Gothic 폴백
+        font = HQ_FONT
+        return (
+            "[Script Info]\n"
+            "Title: Shopping Shorts Reference Style\n"
+            "ScriptType: v4.00+\n"
+            f"PlayResX: {HQ_CANVAS_W}\n"
+            f"PlayResY: {HQ_CANVAS_H}\n"
+            "WrapStyle: 0\n"
+            "ScaledBorderAndShadow: yes\n"
+            "\n"
+            "[V4+ Styles]\n"
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+            "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+            "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+            "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+            # ── Sub: 본편 자막 ──
+            # 상단 중앙(8), 흰색, 볼드, 두꺼운 아웃라인
+            # 레퍼런스: 배경 없이 영상 위 직접 오버레이
+            f"Style: Sub,{font},{HQ_SUBTITLE_FONTSIZE},"
+            f"&H00FFFFFF,&H00FFFFFF,&H00333333,&H00000000,"
+            f"-1,0,0,0,100,100,2,0,1,"
+            f"{HQ_SUBTITLE_OUTLINE},{HQ_SUBTITLE_SHADOW},"
+            f"8,40,40,{HQ_SUBTITLE_MARGIN_TOP},1\n"
+            # ── IntroWhite: 인트로 흰색 타이틀 ──
+            # 화면 중앙(5), 초대형, Extra Bold
+            f"Style: IntroWhite,{font},{HQ_INTRO_TITLE_SIZE},"
+            f"&H00FFFFFF,&H00FFFFFF,&H00222222,&H00000000,"
+            f"-1,0,0,0,100,100,1,0,1,"
+            f"{HQ_INTRO_TITLE_OUTLINE},{HQ_INTRO_TITLE_SHADOW},"
+            f"5,20,20,0,1\n"
+            # ── IntroYellow: 인트로 노란색 강조 ──
+            # 레퍼런스 핵심: 2번째 줄을 노란색으로!
+            f"Style: IntroYellow,{font},{HQ_INTRO_TITLE_SIZE},"
+            f"{HQ_YELLOW_COLOR},&H00FFFFFF,&H00222222,&H00000000,"
+            f"-1,0,0,0,100,100,1,0,1,"
+            f"{HQ_INTRO_TITLE_OUTLINE},{HQ_INTRO_TITLE_SHADOW},"
+            f"5,20,20,0,1\n"
+            # ── IntroHook: 후크 텍스트 ──
+            # 작은 흰색, 반투명 배경 바 효과 (BorderStyle=3)
+            f"Style: IntroHook,{font},{HQ_INTRO_HOOK_SIZE},"
+            f"&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,"
+            f"-1,0,0,0,100,100,0,0,3,"
+            f"15,0,"
+            f"8,30,30,0,1\n"
+            "\n"
+            "[Events]\n"
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
+            "Effect, Text\n"
+        )
+
+    def _group_words_to_chunks(self, word_timings: list) -> list:
+        """단어 타이밍을 자막 청크로 그룹핑 (15자 기준)"""
+        chunks = []
+        current = []
+        current_text = ""
+
+        for wt in word_timings:
+            word = wt["text"]
+            if current_text:
+                current_text += " " + word
+            else:
+                current_text = word
+            current.append(wt)
+
+            should_break = (
+                len(current_text) >= 15
+                or word.rstrip().endswith(('.', '!', '?', '。'))
+                or (word.rstrip().endswith((',', '，')) and len(current_text) >= 10)
+            )
+
+            if should_break and current_text.strip():
+                chunks.append(current[:])
+                current = []
+                current_text = ""
+
+        if current:
+            chunks.append(current[:])
+
+        return chunks
+
+    def _parse_srt(self, srt_path: str) -> list:
+        """SRT 파일을 파싱하여 엔트리 리스트 반환"""
+        entries = []
+        try:
+            with open(srt_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            blocks = content.strip().split('\n\n')
+            for block in blocks:
+                lines = block.strip().split('\n')
+                if len(lines) >= 3:
+                    time_line = lines[1]
+                    parts = time_line.split(' --> ')
+                    if len(parts) == 2:
+                        start = self._srt_time_to_seconds(parts[0].strip())
+                        end = self._srt_time_to_seconds(parts[1].strip())
+                        text = ' '.join(lines[2:])
+                        entries.append({"start": start, "end": end, "text": text})
+        except Exception as e:
+            log.warning("SRT 파싱 실패: %s", e)
+        return entries
+
+    def _srt_time_to_seconds(self, time_str: str) -> float:
+        """SRT 타임코드 → 초 변환 (00:00:01,500 → 1.5)"""
+        time_str = time_str.replace(',', '.')
+        parts = time_str.split(':')
+        if len(parts) == 3:
+            return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+        return 0.0
+
+    @staticmethod
+    def _ass_time(seconds: float) -> str:
+        """초 → ASS 타임코드 (H:MM:SS.CC)"""
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        cs = int((seconds % 1) * 100)
+        return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+    @staticmethod
+    def _clean_title(product_name: str, max_len: int = 28) -> str:
+        """상품명을 제목용으로 정리 (모델번호 제거, 길이 제한)"""
+        # 모델번호 패턴 제거 (영문+숫자 조합)
+        cleaned = re.sub(r'[A-Z]{1,3}\d{3,}\w*', '', product_name)
+        # 연속 공백 정리
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        if not cleaned:
+            cleaned = product_name
+        if len(cleaned) > max_len:
+            cleaned = cleaned[:max_len] + '…'
+        return cleaned
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # 레거시 호환 메서드
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def _build_legacy_video_filter(
+        self, src_w: int, src_h: int, srt_file: str
+    ) -> str:
+        """레거시 비디오 필터 (9:16 크롭 + 자막, anti-duplicate 제거)"""
+        filters = []
+        target_w, target_h = 1080, 1920
+
+        # 스케일 + 크롭
+        filters.append(
+            f"scale={target_w}:{target_h}:"
+            f"force_original_aspect_ratio=increase"
+        )
+        filters.append(f"crop={target_w}:{target_h}")
+
+        # SRT 자막
         if srt_file and os.path.exists(srt_file):
             import shutil
             temp_srt = os.path.join(tempfile.gettempdir(), "shorts_sub.srt")
@@ -905,48 +1249,75 @@ class ShoppingFFmpegComposer:
                 f"Outline={SUBTITLE_OUTLINE},"
                 f"Shadow={SUBTITLE_SHADOW},"
                 f"MarginV={SUBTITLE_MARGIN_V},"
-                f"Bold=1,"
-                f"Alignment=2"  # 하단 중앙
+                f"Bold=1,Alignment=2"
             )
-            filters.append(f"subtitles='{srt_escaped}':force_style='{subtitle_style}'")
+            filters.append(
+                f"subtitles='{srt_escaped}':force_style='{subtitle_style}'"
+            )
 
         return ','.join(filters)
 
-    def _compose_without_srt(
-        self, source_video: str, tts_audio: str, output_path: str, duration: float
+    def _compose_legacy_fallback(
+        self, source_video, tts_audio, srt_file, output_path, duration,
+        keep_original_audio, original_audio_volume,
+        bgm_enabled, bgm_volume, bgm_genre,
     ) -> str:
-        """자막 없이 합성 (폴백)"""
-        log.warning("자막 없이 합성 (폴백)")
+        """HQ 실패 시 레거시 방식으로 폴백"""
+        log.warning("HQ 합성 실패, 레거시 모드로 폴백")
         import shutil
         temp_dir = tempfile.mkdtemp(prefix="shorts_fb_")
         temp_src = os.path.join(temp_dir, "source.mp4")
         temp_tts = os.path.join(temp_dir, "tts.mp3")
         shutil.copy2(source_video, temp_src)
         shutil.copy2(tts_audio, temp_tts)
+
+        # 간단한 합성 (크롭+스케일 + TTS + 자막)
+        vf = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+        if srt_file and os.path.exists(srt_file):
+            temp_srt = os.path.join(temp_dir, "sub.srt")
+            shutil.copy2(srt_file, temp_srt)
+            srt_esc = temp_srt.replace('\\', '/').replace(':', '\\:')
+            vf += (
+                f",subtitles='{srt_esc}':force_style='"
+                f"FontName={HQ_FONT},FontSize={HQ_SUBTITLE_FONTSIZE},"
+                f"PrimaryColour=&Hffffff,OutlineColour=&H000000,"
+                f"Outline={HQ_SUBTITLE_OUTLINE},Shadow={HQ_SUBTITLE_SHADOW},"
+                f"MarginV=60,Bold=1,Alignment=2'"
+            )
+
         cmd = [
             'ffmpeg', '-y',
-            '-i', temp_src,
-            '-i', temp_tts,
-            '-map', '0:v', '-map', '1:a',
-            '-c:v', self.encoder,
-            '-c:a', 'aac', '-b:a', '256k',
-            '-b:v', '18M',
-            '-t', str(duration),
-            '-shortest',
+            '-i', temp_src, '-i', temp_tts,
+            '-filter_complex',
+            f'[0:v]{vf}[vout]',
+            '-map', '[vout]', '-map', '1:a',
+            '-c:v', self.encoder, '-c:a', 'aac',
+            '-b:a', '256k', '-b:v', '18M',
+            '-t', str(duration), '-shortest',
             output_path,
         ]
         if self.encoder == 'h264_nvenc':
             cmd.insert(-1, '-preset')
-            cmd.insert(-1, FFMPEG_PRESET)
+            cmd.insert(-1, 'p6')
 
-        result = subprocess.run(
+        r = subprocess.run(
             cmd, capture_output=True, text=True,
             encoding='utf-8', errors='replace', timeout=300,
         )
-        if result.returncode == 0 and os.path.exists(output_path):
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+        if r.returncode == 0 and os.path.exists(output_path):
+            sz = os.path.getsize(output_path) / (1024 * 1024)
+            log.info("레거시 폴백 합성 완료: %s (%.1fMB)", output_path, sz)
             return output_path
-        log.error("폴백 합성도 실패: %s", result.stderr[-500:] if result.stderr else "")
+
+        log.error("레거시 폴백도 실패: %s", r.stderr[-500:] if r.stderr else "")
         return ""
+
+    # _compose_without_srt 제거됨 — _compose_legacy_fallback으로 통합
 
     def _probe_video(self, path: str) -> dict:
         """비디오 메타데이터 조회"""
@@ -1424,13 +1795,16 @@ class ShoppingShortsPipeline:
         print("\n[4/4] FFmpeg 합성 (소스영상 + TTS + 자막)...")
         output_path = str(self._output_dir / f"shorts_{campaign_id}.mp4")
 
-        composer = ShoppingFFmpegComposer()
+        composer = ShoppingFFmpegComposer(anti_duplicate=False)  # wash_video()가 처리
         final_video = composer.compose(
             source_video=source_video,
             tts_audio=tts_result["audio_path"],
             srt_file=tts_result["srt_path"],
             output_path=output_path,
             max_duration=59.0,
+            product_name=product_name,
+            word_timings=tts_result.get("word_timings"),
+            hq_mode=True,
         )
         result["video_path"] = final_video
 

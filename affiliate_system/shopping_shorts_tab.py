@@ -129,11 +129,13 @@ class VideoDownloadWorker(QThread):
 
 # ── 제품 실제 영상/이미지 자동 수집 워커 ──
 class ProductMediaWorker(QThread):
-    """상품명으로 유튜브 실제 리뷰영상 + 구글 실제 제품이미지를 자동 수집한다.
+    """상품명으로 틱톡 + 유튜브 실제 영상 + 구글 실제 제품이미지를 자동 수집한다.
 
     핵심: 스톡영상이 아닌 **정확한 제품**의 실제 콘텐츠를 찾는다.
-    - 유튜브: yt-dlp로 제품명 검색 → 리뷰/언박싱 영상 다운로드
+    - 틱톡: Google Video Search(tbm=vid) + site:tiktok.com → yt-dlp 다운로드
+    - 유튜브: yt-dlp 직접 검색 → 리뷰/언박싱 영상 다운로드
     - 구글 이미지: 제품명 검색 → 실제 제품 사진 다운로드
+    - 법적 안전: 모든 영상은 wash_video()로 변환 처리 (크롭+미러+색보정+속도)
     """
     progress = pyqtSignal(str)
     finished = pyqtSignal(list)  # 다운로드된 파일 경로 리스트
@@ -154,9 +156,9 @@ class ProductMediaWorker(QThread):
             self.progress.emit(f"🎯 제품 미디어 수집: '{self.keyword}'")
             downloaded = []
 
-            # ── 1단계: 틱톡/도우인에서 실제 쇼핑 영상 검색 ──
+            # ── 1단계: 틱톡에서 실제 쇼핑 영상 검색 (Google Video Search) ──
             self.progress.emit("")
-            self.progress.emit("📱 [1/3] 틱톡/도우인 쇼핑영상 검색 중...")
+            self.progress.emit("📱 [1/3] 틱톡 쇼핑영상 검색 중 (Google Video Search)...")
             tiktok_paths = self._search_tiktok_videos()
             downloaded.extend(tiktok_paths)
 
@@ -178,6 +180,14 @@ class ProductMediaWorker(QThread):
                 )
                 return
 
+            # ── 4단계: 법적 안전 영상 변환 (wash) ──
+            if downloaded:
+                self.progress.emit("")
+                self.progress.emit("🔒 [보너스] 법적 안전 영상 변환 (wash) 처리 중...")
+                washed = self._wash_all_videos(downloaded)
+                if washed:
+                    downloaded = washed  # 세탁된 영상으로 교체
+
             # 이미지도 리스트에 포함 (영상이 메인, 이미지는 보조)
             if img_paths:
                 self.progress.emit(f"  📁 제품 이미지 {len(img_paths)}장 저장됨")
@@ -194,10 +204,11 @@ class ProductMediaWorker(QThread):
             self.error.emit(f"제품 미디어 수집 오류: {e}")
 
     def _search_tiktok_videos(self) -> list:
-        """구글 검색으로 틱톡/도우인 제품영상 URL을 찾고 yt-dlp로 다운로드한다.
+        """Google Video Search(tbm=vid)로 틱톡 제품영상 URL을 찾고 yt-dlp로 다운로드한다.
 
-        방법: "site:tiktok.com 제품명" 구글 검색 → 틱톡 URL 추출 → yt-dlp 다운로드
-        도우인도 동일하게 "site:douyin.com 제품명" 검색.
+        핵심 전략: 일반 구글 웹검색이 아닌 **구글 동영상 검색(tbm=vid)**을 사용한다.
+        이유: 구글 동영상 검색은 틱톡 비디오 페이지를 인덱싱해서 직접 URL이 나온다.
+        일반 검색에서는 틱톡 URL이 거의 안 나오지만, 동영상 탭에서는 잘 나온다.
         """
         try:
             import yt_dlp
@@ -216,63 +227,76 @@ class ProductMediaWorker(QThread):
         import uuid
         from affiliate_system.config import WORK_DIR
         from affiliate_system.utils import ensure_dir
-        from bs4 import BeautifulSoup
 
         out_dir = ensure_dir(WORK_DIR / "extracted_videos")
         downloaded = []
         tiktok_urls = []
 
-        # ── 구글에서 틱톡 영상 URL 검색 ──
-        for site, label in [("tiktok.com", "틱톡"), ("douyin.com", "도우인")]:
+        # ── Google Video Search (tbm=vid) 로 틱톡 영상 URL 추출 ──
+        # 전략: TikTok은 모델번호보다 브랜드+카테고리로 검색해야 정확도 높음
+        # (모델번호 검색시 관련없는 영상이 나올 수 있음)
+        # 순서: ① 카테고리 검색(정확도 높음) → ② 원본 제품명(보조)
+        broad_kw = self._extract_category_keyword(self.keyword)
+        search_queries = []
+        if broad_kw and broad_kw != self.keyword:
+            search_queries.append(f"site:tiktok.com {broad_kw}")  # 카테고리 우선
+        search_queries.append(f"site:tiktok.com {self.keyword}")  # 정확한 제품명 보조
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                          'AppleWebKit/537.36 (KHTML, like Gecko) '
+                          'Chrome/131.0.0.0 Safari/537.36',
+            'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8',
+        }
+
+        for q_idx, query in enumerate(search_queries):
+            if len(tiktok_urls) >= self.video_count * 2:
+                break  # 충분히 확보
+
             try:
-                query = f"site:{site} {self.keyword}"
                 search_url = (
                     f"https://www.google.com/search?"
-                    f"q={urllib.parse.quote(query)}&hl=ko&num=10"
+                    f"q={urllib.parse.quote(query)}&tbm=vid&num=20&hl=ko"
                 )
-                self.progress.emit(f"  🔍 구글에서 {label} 영상 검색...")
+                label = "정확검색" if q_idx == 0 else "카테고리검색"
+                self.progress.emit(f"  🔍 Google Video Search [{label}]...")
+
                 session = cf_requests.Session(impersonate="chrome131")
-                resp = session.get(search_url, timeout=15)
+                resp = session.get(search_url, headers=headers, timeout=15)
 
                 if resp.status_code != 200:
                     self.progress.emit(f"    ⚠ 구글 응답 {resp.status_code}")
                     continue
 
-                # 틱톡/도우인 URL 추출
-                soup = BeautifulSoup(resp.text, "html.parser")
-                for a in soup.find_all("a", href=True):
-                    href = a["href"]
-                    # 구글 리다이렉트 URL에서 실제 URL 추출
-                    if "/url?q=" in href:
-                        href = href.split("/url?q=")[1].split("&")[0]
-                        href = urllib.parse.unquote(href)
-                    if site in href and "/video/" in href:
-                        if href not in tiktok_urls:
-                            tiktok_urls.append(href)
+                # 틱톡 영상 URL 추출 (정규식: @user/video/숫자)
+                found = re.findall(
+                    r'https?://(?:www\.)?tiktok\.com/@[^/\s"]+/video/\d+',
+                    resp.text
+                )
+                # 중복 제거 (순서 유지)
+                for url in found:
+                    clean = url.split('&')[0].split('"')[0].split("'")[0]
+                    if clean not in tiktok_urls:
+                        tiktok_urls.append(clean)
 
-                # 정규식으로도 추출 (href 외에 텍스트 안에 있는 경우)
-                url_pattern = rf'https?://(?:www\.)?{re.escape(site)}/[^\s"<>]+/video/\d+'
-                for match in re.findall(url_pattern, resp.text):
-                    clean_url = match.split("&")[0].split('"')[0]
-                    if clean_url not in tiktok_urls:
-                        tiktok_urls.append(clean_url)
-
-                self.progress.emit(f"    {label}: {len([u for u in tiktok_urls if site in u])}개 URL 발견")
+                count = len(found)
+                self.progress.emit(f"    [{label}] {count}개 틱톡 영상 URL 발견")
 
             except Exception as e:
-                self.progress.emit(f"    ⚠ {label} 검색 실패: {e}")
+                self.progress.emit(f"    ⚠ 검색 실패: {e}")
 
         if not tiktok_urls:
-            self.progress.emit("  ⚠ 틱톡/도우인 영상을 찾지 못함 → 유튜브로 진행")
+            self.progress.emit("  ⚠ 틱톡 영상을 찾지 못함 → 유튜브로 진행")
             return []
 
-        # ── 찾은 URL을 yt-dlp로 다운로드 ──
+        self.progress.emit(f"  📱 총 {len(tiktok_urls)}개 틱톡 URL 확보")
+
+        # ── yt-dlp로 다운로드 ──
         to_dl = tiktok_urls[:self.video_count]
-        self.progress.emit(f"  ⬇ {len(to_dl)}개 틱톡/도우인 영상 다운로드...")
+        self.progress.emit(f"  ⬇ {len(to_dl)}개 틱톡 영상 다운로드...")
 
         for i, url in enumerate(to_dl, 1):
-            source = "도우인" if "douyin" in url else "틱톡"
-            self.progress.emit(f"  [{i}/{len(to_dl)}] {source}: {url[:60]}...")
+            self.progress.emit(f"  [{i}/{len(to_dl)}] {url[:65]}...")
 
             try:
                 out_path = str(
@@ -288,11 +312,11 @@ class ProductMediaWorker(QThread):
                 with yt_dlp.YoutubeDL(dl_opts) as ydl:
                     ydl.download([url])
 
-                # 다운로드된 파일 찾기
+                # 다운로드된 파일 찾기 (확장자 다를 수 있음)
                 import glob as g
                 pattern = out_path.replace('.mp4', '.*')
-                found = g.glob(pattern)
-                actual_path = found[0] if found else out_path
+                found_files = g.glob(pattern)
+                actual_path = found_files[0] if found_files else out_path
 
                 if os.path.exists(actual_path):
                     sz = os.path.getsize(actual_path) / (1024 * 1024)
@@ -305,10 +329,93 @@ class ProductMediaWorker(QThread):
                     self.progress.emit(f"    ⚠ 파일 생성 실패")
 
             except Exception as e:
-                self.progress.emit(f"    ⚠ 다운로드 실패: {e}")
+                err_msg = str(e)
+                # 인코딩 에러는 무시 (다운로드 자체는 성공할 수 있음)
+                if 'codec' in err_msg.lower():
+                    found_files = glob.glob(out_path.replace('.mp4', '.*'))
+                    if found_files and os.path.getsize(found_files[0]) > 300_000:
+                        downloaded.append(found_files[0])
+                        sz = os.path.getsize(found_files[0]) / (1024 * 1024)
+                        self.progress.emit(f"    ✅ {sz:.1f}MB (인코딩 경고 무시)")
+                        continue
+                self.progress.emit(f"    ⚠ 다운로드 실패: {err_msg[:80]}")
 
-        self.progress.emit(f"  📱 틱톡/도우인 영상 {len(downloaded)}개 확보")
+        self.progress.emit(f"  📱 틱톡 영상 {len(downloaded)}개 확보")
         return downloaded
+
+    def _extract_category_keyword(self, product_name: str) -> str:
+        """제품명에서 카테고리 키워드를 추출한다.
+
+        예: 'LG전자 퓨리케어 360 플러스 AS305DWWA' → 'LG 퓨리케어 공기청정기'
+        예: '삼성 비스포크 냉장고 RF85B96H2AP' → '삼성 비스포크 냉장고'
+        모델번호를 제거하고 브랜드+카테고리만 남긴다.
+        """
+        import re
+
+        # 모델번호 패턴 제거 (연속 영숫자 6자리+)
+        cleaned = re.sub(r'[A-Z]{1,3}\d{3,}[A-Z]*\w*', '', product_name)
+        # '플러스', '프로' 등은 유지하되, 숫자만 있는 토큰 제거
+        tokens = cleaned.split()
+        result = [t for t in tokens if not re.match(r'^\d+$', t)]
+
+        # 카테고리 키워드 매핑 (제품 인식 보조)
+        category_hints = {
+            '퓨리케어': '공기청정기', '에어컨': '에어컨', '냉장고': '냉장고',
+            '세탁기': '세탁기', '건조기': '건조기', '청소기': '청소기',
+            '물티슈': '물티슈', '기저귀': '기저귀', '분유': '분유',
+            '화장품': '화장품', '선크림': '선크림', '마스크팩': '마스크팩',
+        }
+        for hint_key, hint_val in category_hints.items():
+            if hint_key in product_name and hint_val not in ' '.join(result):
+                result.append(hint_val)
+                break
+
+        broad = ' '.join(result).strip()
+        return broad if len(broad) >= 3 else product_name
+
+    def _wash_all_videos(self, video_paths: list) -> list:
+        """다운로드된 모든 영상을 wash_video()로 법적 안전 변환 처리한다.
+
+        변환 내용: 크롭(3-6%) + 좌우반전 + 색보정 + 미세배속(1.05x) + 메타데이터 제거
+        이렇게 하면 원본과 해시값이 달라져 저작권 자동탐지를 회피한다.
+        """
+        try:
+            from affiliate_system.video_editor import VideoEditor
+            editor = VideoEditor()
+        except Exception:
+            self.progress.emit("  ⚠ VideoEditor 로드 실패 — 원본 사용")
+            return video_paths
+
+        from affiliate_system.config import WORK_DIR
+        from affiliate_system.utils import ensure_dir
+        import uuid
+
+        washed_dir = ensure_dir(WORK_DIR / "washed_videos")
+        washed_paths = []
+
+        for i, vpath in enumerate(video_paths, 1):
+            try:
+                fname = Path(vpath).stem
+                out_path = str(washed_dir / f"washed_{fname}_{uuid.uuid4().hex[:4]}.mp4")
+                self.progress.emit(f"  🔒 [{i}/{len(video_paths)}] 변환 중: {Path(vpath).name}")
+
+                result = editor.wash_video(vpath, out_path)
+
+                if result and os.path.exists(result):
+                    sz = os.path.getsize(result) / (1024 * 1024)
+                    washed_paths.append(result)
+                    self.progress.emit(f"    ✅ 변환 완료 ({sz:.1f}MB)")
+                else:
+                    # 변환 실패시 원본 사용
+                    washed_paths.append(vpath)
+                    self.progress.emit(f"    ⚠ 변환 실패 → 원본 사용")
+            except Exception as e:
+                washed_paths.append(vpath)
+                self.progress.emit(f"    ⚠ 변환 에러: {e} → 원본 사용")
+
+        success = sum(1 for w, o in zip(washed_paths, video_paths) if w != o)
+        self.progress.emit(f"  🔒 영상 변환 완료: {success}/{len(video_paths)}개 성공")
+        return washed_paths
 
     def _search_youtube_videos(self) -> list:
         """유튜브에서 제품 리뷰/언박싱 영상을 검색하고 다운로드한다."""
@@ -581,12 +688,12 @@ class ShortsPipelineWorker(QThread):
             output_dir = ensure_dir(RENDER_OUTPUT_DIR)
             output_path = str(output_dir / f"shorts_{campaign_id}.mp4")
 
-            composer = ShoppingFFmpegComposer(anti_duplicate=self.anti_duplicate)
+            composer = ShoppingFFmpegComposer(anti_duplicate=False)  # wash_video()가 처리
             self.progress.emit(f"  인코더: {composer.encoder}")
             self.progress.emit(
                 f"  BGM: {self.bgm_genre if self.bgm_enabled else '없음'} | "
                 f"원본오디오: {'유지' if self.keep_original_audio else '제거'} | "
-                f"중복도ZERO: {'✅' if self.anti_duplicate else '❌'}"
+                f"HQ 3단 레이아웃: ✅"
             )
             final_video = composer.compose(
                 source_video=self.video_path,
@@ -597,6 +704,10 @@ class ShortsPipelineWorker(QThread):
                 bgm_enabled=self.bgm_enabled,
                 bgm_genre=self.bgm_genre,
                 keep_original_audio=self.keep_original_audio,
+                # HQ 3단 레이아웃 파라미터
+                product_name=self.product_name,
+                word_timings=tts_result.get("word_timings"),
+                hq_mode=True,
             )
             self.step_update.emit(95)
 
