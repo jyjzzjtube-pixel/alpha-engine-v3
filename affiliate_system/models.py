@@ -104,7 +104,11 @@ class PlatformPreset:
     # 자막 스펙
     subtitle_fontsize: int = 65
     subtitle_position: str = "bottom"  # bottom, center, top
-    subtitle_style: str = "modern"   # modern, classic, minimal, bold
+    subtitle_style: str = "modern"   # modern, classic, minimal, bold, framed, pro
+    subtitle_animation: str = "fade"   # fade / typing / none
+
+    # 캔버스 레이아웃
+    canvas_layout: str = "framed"    # framed(상단설명+중앙이미지+하단자막) / fullscreen / auto
 
     # 전환 효과
     transition_type: TransitionType = TransitionType.CROSSFADE
@@ -130,30 +134,33 @@ class PlatformPreset:
 PLATFORM_PRESETS: dict[Platform, PlatformPreset] = {
     Platform.YOUTUBE: PlatformPreset(
         platform=Platform.YOUTUBE,
-        # YouTube Shorts: 9:16, 최대 60초
+        # YouTube Shorts: 9:16, 최대 60초 — HQ 최적화
         video_width=1080,
         video_height=1920,
         video_fps=60,
         max_duration_sec=60,
         min_duration_sec=15,
         ideal_duration_sec=45,
-        video_bitrate="12M",
+        video_bitrate="18M",        # 10M→18M HQ
         # 제목 100자, 설명 5000자 (첫 2줄이 중요)
         title_max_chars=100,
         body_max_chars=5000,
-        hashtag_count=10,           # YouTube는 3~10개 권장
-        # 썸네일 (1280x720 가로형도 가능하지만 Shorts는 세로)
+        hashtag_count=10,
+        # 썸네일
         thumb_width=1080,
         thumb_height=1920,
         thumb_format="JPEG",
-        # TTS/오디오
-        tts_speed="+15%",
-        bgm_volume=0.08,
-        bgm_genre=BGMGenre.UPBEAT,
-        # 자막
-        subtitle_fontsize=70,
+        # TTS/오디오 — 자연스러운 속도 + 잔잔한 BGM
+        tts_speed="+0%",            # +5%→+0% 더 자연어 속도
+        bgm_volume=0.10,            # 잔잔하게
+        bgm_genre=BGMGenre.LOFI,    # UPBEAT→LOFI 잔잔한 배경음
+        # 자막 — pro 스타일 (굵은 텍스트+아웃라인+컬러강조, 레퍼런스 수준)
+        subtitle_fontsize=62,
         subtitle_position="bottom",
-        subtitle_style="bold",
+        subtitle_style="pro",       # 세련된 볼드+아웃라인+컬러 강조
+        subtitle_animation="typing", # 타이핑 효과
+        # 캔버스 — framed 레이아웃 (상단 설명 + 중앙 이미지 + 하단 자막)
+        canvas_layout="framed",
         # 전환
         transition_type=TransitionType.CROSSFADE,
         transition_duration=0.3,
@@ -166,7 +173,7 @@ PLATFORM_PRESETS: dict[Platform, PlatformPreset] = {
         intro_duration=1.5,
         outro_duration=3.0,
         # CTA
-        cta_text="구독 & 좋아요 부탁드려요! 🔔",
+        cta_text="구독 & 좋아요 부탁드려요!",
         cta_position="end",
     ),
     Platform.INSTAGRAM: PlatformPreset(
@@ -361,12 +368,22 @@ class RenderConfig:
     tts_speed: str = "+15%"
     tts_voice: str = "ko-female"
     effect_mode: str = "dynamic"
-    # Anti-ban
+    # Anti-ban (HQ 모드에서는 전부 False)
+    anti_ban_enabled: bool = True      # False면 노이즈/지터 전부 스킵
     dimension_jitter: bool = True
     opacity_jitter: bool = True
     audio_pad_jitter: bool = True
     subtitle_enabled: bool = True
     subtitle_fontsize: int = 65
+    subtitle_style: str = "modern"
+    subtitle_position: str = "bottom"    # top / center / bottom
+    subtitle_animation: str = "fade"     # fade / typing / none
+    # 캔버스 레이아웃
+    canvas_layout: str = "auto"          # auto / framed / fullscreen / legacy
+    # 인코딩
+    video_bitrate: str = "10M"
+    audio_bitrate: str = "192k"
+    encode_preset: str = "medium"      # slow=고품질, medium=균형, fast=속도
     # 향상된 렌더링 옵션
     transition_type: str = "crossfade"
     transition_duration: float = 0.4
@@ -384,18 +401,27 @@ class RenderConfig:
                              brand: str = "") -> "RenderConfig":
         """플랫폼 프리셋으로부터 RenderConfig를 생성한다."""
         branding = BRAND_BRANDING.get(brand)
+        # YouTube는 HQ 모드 (안티밴 OFF, 고비트레이트)
+        is_hq = preset.platform == Platform.YOUTUBE
         return cls(
             width=preset.video_width,
             height=preset.video_height,
             fps=preset.video_fps,
             tts_speed=preset.tts_speed,
             tts_voice="ko-female",
-            effect_mode="dynamic",
-            dimension_jitter=True,
-            opacity_jitter=True,
-            audio_pad_jitter=True,
+            effect_mode="cinematic" if is_hq else "dynamic",
+            anti_ban_enabled=not is_hq,
+            dimension_jitter=not is_hq,
+            opacity_jitter=not is_hq,
+            audio_pad_jitter=not is_hq,
             subtitle_enabled=True,
             subtitle_fontsize=preset.subtitle_fontsize,
+            subtitle_style=preset.subtitle_style,
+            subtitle_animation=preset.subtitle_animation,
+            canvas_layout=preset.canvas_layout,
+            video_bitrate=preset.video_bitrate,
+            audio_bitrate="256k" if is_hq else "192k",
+            encode_preset="slow" if is_hq else "medium",
             transition_type=preset.transition_type.value,
             transition_duration=preset.transition_duration,
             text_animation=preset.text_animation.value,

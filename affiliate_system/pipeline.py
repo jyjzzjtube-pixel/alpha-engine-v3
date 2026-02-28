@@ -64,6 +64,8 @@ class ContentPipeline:
         brand: str = "",
         persona: str = "",
         auto_upload: bool = False,
+        browser_image_urls: Optional[list[str]] = None,
+        local_images: Optional[list[str]] = None,
     ) -> dict:
         """풀 파이프라인을 실행한다.
 
@@ -73,6 +75,9 @@ class ContentPipeline:
             brand: 브랜드명 (브랜딩 적용 시)
             persona: AI 페르소나
             auto_upload: True이면 자동 업로드까지 수행
+            browser_image_urls: Chrome 브라우저에서 추출한 이미지 URL 리스트
+                               (쿠팡 등 봇 차단 사이트용 - 최우선 사용)
+            local_images: 이미 저장된 이미지 파일 경로 리스트
 
         Returns:
             {
@@ -85,6 +90,9 @@ class ContentPipeline:
               "upload_results": {...} (auto_upload일 때만)
             }
         """
+        # 브라우저 이미지 정보 저장 (Step 3에서 사용)
+        self._browser_image_urls = browser_image_urls
+        self._local_images = local_images
         platforms = platforms or ALL_PLATFORMS
         campaign_id = uuid.uuid4().hex[:8]
         start_time = time.time()
@@ -293,43 +301,82 @@ class ContentPipeline:
     # ──────────────────────────────────────────────
 
     def _collect_media(self, product: Product) -> list[str]:
-        """스톡 이미지를 수집하고 다운로드한다."""
-        from affiliate_system.media_collector import MediaCollector
+        """
+        미디어 이미지를 수집한다.
 
-        collector = MediaCollector()
+        수집 우선순위 (쿠팡 URL인 경우):
+          1. 브라우저 캡처 이미지 (Chrome DOM 추출 URL)
+          2. 로컬 이미지 (이미 저장된 파일)
+          3. HTTP 스크래핑 (쿠팡 403 가능성 높음 - 폴백)
+          ※ 스톡 이미지(Pexels/Unsplash)는 상품과 무관하므로 사용하지 않음
+
+        수집 우선순위 (일반 URL/주제인 경우):
+          1. 로컬 이미지 / 브라우저 캡처
+          2. 상품 자체 이미지 (og:image 등)
+          3. 스톡 이미지 (Pexels + Unsplash)
+        """
+        from affiliate_system.coupang_scraper import CoupangScraper
+
+        is_coupang = (product.url and CoupangScraper.is_coupang_url(product.url))
+
+        # ── 쿠팡 상품: 브라우저 캡처 우선 (실제 상품 이미지 필수!) ──
+        if is_coupang:
+            from affiliate_system.video_editor import MediaExtractor
+            extractor = MediaExtractor()
+
+            images = extractor.get_coupang_images(
+                product_url=product.url or "",
+                browser_image_urls=getattr(self, "_browser_image_urls", None),
+                local_images=getattr(self, "_local_images", None),
+                product_name=product.title or "coupang",
+                max_images=8,
+            )
+
+            if images:
+                logger.info(f"쿠팡 이미지 수집 완료: {len(images)}개 (브라우저/로컬/스크래핑)")
+                return images
+
+            # 폴백: 상품 자체 image_urls (스크래핑에서 추출된 것)
+            if product.image_urls:
+                downloaded = []
+                for url in product.image_urls[:5]:
+                    try:
+                        path = extractor.download_image(url)
+                        if path:
+                            downloaded.append(path)
+                    except Exception:
+                        pass
+                if downloaded:
+                    logger.info(f"쿠팡 상품 이미지 폴백: {len(downloaded)}개")
+                    return downloaded
+
+            logger.warning("쿠팡 이미지 수집 실패! Chrome에서 쿠팡 페이지를 열어주세요.")
+            return []
+
+        # ── 일반 상품/주제: 기존 방식 (로컬 → 상품이미지 → 스톡) ──
         downloaded: list[str] = []
 
-        # 검색 키워드 생성 (상품명에서 핵심 키워드 추출)
-        query = product.title[:30] if product.title else "product"
-        # 한국어 키워드는 영어로 변환하여 검색
-        query_en = self._extract_search_keywords(product)
+        # 로컬/브라우저 캡처 이미지 (있으면 우선 사용)
+        if getattr(self, "_local_images", None):
+            from affiliate_system.video_editor import MediaExtractor
+            extractor = MediaExtractor()
+            downloaded = extractor.register_local_images(
+                self._local_images, product.title or "product"
+            )
+        elif getattr(self, "_browser_image_urls", None):
+            from affiliate_system.video_editor import MediaExtractor
+            extractor = MediaExtractor()
+            downloaded = extractor.capture_browser_images(
+                self._browser_image_urls, product.title or "product"
+            )
 
-        # Pexels + Unsplash 통합 검색
-        all_results: list[dict] = []
-        try:
-            pexels = collector.search_pexels_images(query_en, count=5)
-            all_results.extend(pexels)
-        except Exception as e:
-            logger.warning(f"Pexels 검색 실패: {e}")
+        if downloaded:
+            return downloaded
 
-        try:
-            unsplash = collector.search_unsplash_images(query_en, count=5)
-            all_results.extend(unsplash)
-        except Exception as e:
-            logger.warning(f"Unsplash 검색 실패: {e}")
+        # 상품 자체 이미지 다운로드
+        from affiliate_system.media_collector import MediaCollector
+        collector = MediaCollector()
 
-        # 상위 5개 다운로드
-        for item in all_results[:5]:
-            try:
-                img_url = item.get("url", "")
-                if img_url:
-                    path = collector.download_image(img_url)
-                    if path:
-                        downloaded.append(path)
-            except Exception as e:
-                logger.warning(f"이미지 다운로드 실패: {e}")
-
-        # 상품 자체 이미지도 다운로드
         for img_url in product.image_urls[:3]:
             try:
                 path = collector.download_image(img_url)
@@ -337,6 +384,30 @@ class ContentPipeline:
                     downloaded.append(path)
             except Exception:
                 pass
+
+        # 스톡 이미지 보충 (부족하면)
+        if len(downloaded) < 3:
+            query_en = self._extract_search_keywords(product)
+            all_results: list[dict] = []
+            try:
+                pexels = collector.search_pexels_images(query_en, count=5)
+                all_results.extend(pexels)
+            except Exception as e:
+                logger.warning(f"Pexels 검색 실패: {e}")
+            try:
+                unsplash = collector.search_unsplash_images(query_en, count=5)
+                all_results.extend(unsplash)
+            except Exception as e:
+                logger.warning(f"Unsplash 검색 실패: {e}")
+            for item in all_results[:5]:
+                try:
+                    img_url = item.get("url", "")
+                    if img_url:
+                        path = collector.download_image(img_url)
+                        if path:
+                            downloaded.append(path)
+                except Exception:
+                    pass
 
         logger.info(f"미디어 수집 완료: {len(downloaded)}개")
         return downloaded

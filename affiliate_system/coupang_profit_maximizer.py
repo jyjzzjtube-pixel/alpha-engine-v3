@@ -130,6 +130,11 @@ class CoupangProfitMaximizer:
             self._scraper = CoupangScraper()
         return self._scraper
 
+    def set_browser_images(self, image_urls: list[str]):
+        """Chrome 브라우저에서 추출한 이미지 URL 설정 (파이프라인에서 우선 사용)."""
+        self._browser_image_urls = image_urls
+        logger.info(f"브라우저 캡처 이미지 URL {len(image_urls)}개 설정됨")
+
     # ── 메인 루프 ──
 
     def run_interactive(self):
@@ -292,22 +297,38 @@ class CoupangProfitMaximizer:
             "steps_completed": [],
         }
 
-        # ── Step 3: 미디어 수집 ──
+        # ── Step 3: 미디어 수집 (브라우저 캡처 우선!) ──
         print("\n[3/10] 미디어 수집 중...")
 
-        # 블로그 이미지
+        # 쿠팡 상품 이미지 (브라우저 캡처 우선 → HTTP 폴백)
+        coupang_images = []
+        if hasattr(self, '_browser_image_urls') and self._browser_image_urls:
+            from affiliate_system.video_editor import MediaExtractor
+            extractor = MediaExtractor()
+            coupang_images = extractor.get_coupang_images(
+                product_url=coupang_link,
+                browser_image_urls=self._browser_image_urls,
+                product_name=product.title or "coupang",
+                max_images=8,
+            )
+            print(f"  브라우저 캡처 이미지: {len(coupang_images)}장")
+
+        # 블로그 이미지 (캡처 이미지 있으면 그것 우선)
         image_keywords = blog_data.get("image_keywords", [])
         try:
-            blog_images = self.omni_collector.collect_blog_images(
-                product.title, image_keywords,
-                product_image_urls=product.image_urls,
-                count=5,
-            )
+            if coupang_images:
+                blog_images = coupang_images[:5]
+            else:
+                blog_images = self.omni_collector.collect_blog_images(
+                    product.title, image_keywords,
+                    product_image_urls=product.image_urls,
+                    count=5,
+                )
             results["blog_images"] = blog_images
             print(f"  블로그 이미지: {len(blog_images)}장 수집 완료")
         except Exception as e:
             logger.error(f"블로그 이미지 수집 실패: {e}")
-            blog_images = []
+            blog_images = coupang_images[:5] if coupang_images else []
             print(f"  블로그 이미지 수집 실패: {e}")
 
         # 숏폼 영상 클립
