@@ -1789,7 +1789,8 @@ function drawPieChart() {
   });
   const total = values.reduce((a,b) => a+b, 0);
 
-  const cx = w * 0.35, cy = h / 2, r = Math.min(cx, cy) - 10;
+  const cx = w * 0.35, cy = h / 2, r = Math.max(0, Math.min(cx, cy) - 10);
+  if (r <= 0) return;
   let startAngle = -Math.PI / 2;
 
   values.forEach((val, i) => {
