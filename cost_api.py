@@ -17,13 +17,15 @@ API 비용 통합 REST API 서버
     GET /api/cost/models    모델별 비용 분류
     GET /api/cost/projects  프로젝트별 비용 분류
 """
+import os
 import sys
 import argparse
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from functools import wraps
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 # ── 기존 CostTracker 재사용 ──
@@ -32,6 +34,17 @@ from api_cost_tracker import CostTracker, BUDGET_LIMIT_KRW, BUDGET_WARN_RATIO
 
 app = Flask(__name__)
 CORS(app)  # 모든 도메인에서 접근 허용
+
+# ── API 키 인증 (환경변수 COST_API_KEY 설정 시 활성화) ──
+API_KEY = os.environ.get('COST_API_KEY', '')
+
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if API_KEY and request.headers.get('X-API-Key') != API_KEY:
+            return jsonify({'error': 'Unauthorized'}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 tracker = CostTracker(project_name="cost_api")
 
@@ -49,6 +62,7 @@ def _format_krw(usd: float, rate: float) -> str:
 # ══════════════════════════════════════════════════════════
 
 @app.route("/api/cost/summary")
+@require_auth
 def cost_summary():
     """전체 비용 요약 — 모든 사이트의 메인 데이터 소스."""
     rate = tracker.get_exchange_rate()
@@ -94,6 +108,7 @@ def cost_summary():
 
 
 @app.route("/api/cost/today")
+@require_auth
 def cost_today():
     """오늘 비용 상세 (모델별 분류 포함)."""
     rate = tracker.get_exchange_rate()
@@ -130,6 +145,7 @@ def cost_today():
 
 
 @app.route("/api/cost/monthly")
+@require_auth
 def cost_monthly():
     """이번달 비용 상세 (모델별 분류 포함)."""
     rate = tracker.get_exchange_rate()
@@ -184,6 +200,7 @@ def cost_monthly():
 
 
 @app.route("/api/cost/history")
+@require_auth
 def cost_history():
     """최근 50건 사용 내역."""
     rate = tracker.get_exchange_rate()
@@ -215,6 +232,7 @@ def cost_history():
 
 
 @app.route("/api/cost/models")
+@require_auth
 def cost_models():
     """모델별 비용 분류."""
     rate = tracker.get_exchange_rate()
@@ -235,6 +253,7 @@ def cost_models():
 
 
 @app.route("/api/cost/projects")
+@require_auth
 def cost_projects():
     """프로젝트별 비용 분류."""
     rate = tracker.get_exchange_rate()

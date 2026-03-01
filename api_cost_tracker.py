@@ -21,8 +21,8 @@ log = logging.getLogger("cost_tracker")
 # ============================================================
 PRICE_TABLE: dict[str, dict[str, float]] = {
     # Google Gemini
-    "gemini-2.5-pro":           {"input": 0.00125, "output": 0.0100},
-    "gemini-2.5-flash":         {"input": 0.00015, "output": 0.0035},
+    "gemini-2.5-pro":           {"input": 0.00125, "output": 0.0050},
+    "gemini-2.5-flash":         {"input": 0.00015, "output": 0.0006},
     "gemini-2.0-flash":         {"input": 0.00010, "output": 0.0004},
     "gemini-2.0-flash-lite":    {"input": 0.00000, "output": 0.0000},
     "gemini-1.5-pro":           {"input": 0.00125, "output": 0.00500},

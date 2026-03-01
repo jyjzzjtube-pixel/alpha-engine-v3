@@ -181,9 +181,9 @@ let Y=2025,M=12,V='rpt',D={},CH={};
 const SK='sinchon_v5',AK='sinchon_api',GK='sinchon_gemini',BK='sinchon_bank';
 let BNK={};
 function init(){
-  // API 키 자동 설정 (localStorage에 없으면 기본값 세팅)
-  if(!localStorage.getItem(GK))localStorage.setItem(GK,'AIzaSyDyVjF8xDEsZNJk3_TTaWPj6bzluiiY3To');
-  if(!localStorage.getItem(AK))localStorage.setItem(AK,'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');
+  // API 키: localStorage에서 로드 (하드코딩 제거, 사용자 직접 입력)
+  if(!localStorage.getItem(GK)){console.log('[Sinchon] Gemini API 키 미설정 — 설정에서 입력하세요');}
+  if(!localStorage.getItem(AK)){console.log('[Sinchon] Claude API 키 미설정 — 설정에서 입력하세요');}
   try{BNK=JSON.parse(localStorage.getItem(BK))||{}}catch(e){BNK={}}
   // 계좌정보 강제 세팅
   const defBnk={'이채영':{bank:'우리은행',acct:'001-21-0174-858'},'임명자':{bank:'농협',acct:'356-0906-5354-83'},'서지희':{bank:'신한',acct:'110-58775-1268'},'서현경':{bank:'국민',acct:'814301-04-064842'},'정혜빈':{bank:'우리은행',acct:'119-04-972102-601'},'정의송':{bank:'',acct:''},'길호정':{bank:'농협',acct:'302-1204-0117-61'}};

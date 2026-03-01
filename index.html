@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>ALPHA ENGINE v5.8 - AI 주식 투자 도우미</title>
-<meta name="description" content="ALPHA ENGINE v5.8 - Claude, Gemini, Groq AI를 활용한 한국/미국 주식 분석 도우미. 실시간 시세, 포트폴리오 관리, 교차검증 매매 신호 제공.">
+<title>ALPHA ENGINE v5.9 - AI 주식 투자 도우미</title>
+<meta name="description" content="ALPHA ENGINE v5.9 - Claude, Gemini, Groq AI를 활용한 한국/미국 주식 분석 도우미. 실시간 시세, 포트폴리오 관리, 교차검증 매매 신호 제공.">
 <meta name="keywords" content="주식, 투자, AI, 삼성전자, 코스피, 나스닥, 포트폴리오, 매매신호, Claude, Gemini">
 <meta name="author" content="Alpha Engine">
 <meta name="robots" content="index, follow">
-<meta property="og:title" content="ALPHA ENGINE v5.8 - AI 주식 투자 도우미">
+<meta property="og:title" content="ALPHA ENGINE v5.9 - AI 주식 투자 도우미">
 <meta property="og:description" content="Claude, Gemini, Groq AI 교차검증으로 매수/매도/홀딩 신호를 제공하는 주식 투자 도우미 앱">
 <meta property="og:type" content="website">
 <meta property="og:locale" content="ko_KR">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="ALPHA ENGINE v5.8 - AI 주식 투자 도우미">
+<meta name="twitter:title" content="ALPHA ENGINE v5.9 - AI 주식 투자 도우미">
 <meta name="twitter:description" content="AI 교차검증 매매 신호 제공. 한국/미국 주식 실시간 분석.">
 <meta name="theme-color" content="#6c5ce7">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -894,7 +894,7 @@ textarea.input-field { resize: vertical; min-height: 60px; }
 <!-- Header -->
 <div class="header">
   <div>
-    <div class="header-title">ALPHA ENGINE <span class="header-ver">v5.8</span></div>
+    <div class="header-title">ALPHA ENGINE <span class="header-ver">v5.9</span></div>
   </div>
   <div class="header-actions">
     <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">🌙</button>
@@ -1268,7 +1268,7 @@ textarea.input-field { resize: vertical; min-height: 60px; }
       <button class="btn btn-outline" onclick="document.getElementById('importFile').click()" style="flex:1">📥 가져오기</button>
       <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(event)">
     </div>
-    <button class="btn btn-red btn-sm" onclick="(function(){var pw=prompt('초기화를 위해 비밀번호를 입력하세요:');if(pw===null)return;if(pw!=='0729'){alert('비밀번호가 틀렸습니다.');return}if(confirm('모든 데이터를 초기화할까요?')){localStorage.removeItem('alphaEngine5');localStorage.removeItem('alphaEngine4');location.reload()}})()" style="width:100%">🗑 데이터 초기화</button>
+    <button class="btn btn-red btn-sm" onclick="(async function(){var pw=prompt('초기화를 위해 비밀번호를 입력하세요:');if(pw===null)return;var enc=new TextEncoder().encode(pw);var hash=await crypto.subtle.digest('SHA-256',enc);var hex=Array.from(new Uint8Array(hash)).map(function(b){return b.toString(16).padStart(2,'0')}).join('');if(hex!=='a05265acb51a22ec9655e1cd39e968be4fa8e40c67dd78edb0ea4d44c3c1b8e0'){alert('비밀번호가 틀렸습니다.');return}if(confirm('모든 데이터를 초기화할까요?')){localStorage.removeItem('alphaEngine5');localStorage.removeItem('alphaEngine4');location.reload()}})()" style="width:100%">🗑 데이터 초기화</button>
   </div>
 </div>
 
@@ -1460,22 +1460,14 @@ function loadState() {
       const parsed = JSON.parse(saved);
       state = { ...state, ...parsed };
     }
-    // 기본 API 키 자동 주입 (미설정 시)
-    const keyDefaults = {
-      gemini: ['AIza','SyCs','7QZe','q1xk','b6VG','j0iw','tcYz','r7C_','jElv','NXg'].join(''),
-      perplexity: ['pplx-','DODV8cq9BuQG','i5slSkKkVQf9','fthREzsYH4cl','RYaBkeoOdKjw'].join(''),
-      alpha: '8CEA89VHHEZIOWQY',
-      claude: ['sk-ant-api03-pZS0ER_OL16UaThtXQk0x1','oBT_Hk8XsY8i6WBRbBYh3m1c6rYR6ruu5XwDXEjKSS','DeaGOOe-6xoXugIBKW-HcQ-b4zlwgAA'].join(''),
-    };
+    // API 키: localStorage에서 로드 (하드코딩 제거, 사용자 직접 입력)
     const apiDefaults = { gemini:true, perplexity:true, groq:false, claude:true, alpha:true };
-    let injected = [];
-    for (const [k,v] of Object.entries(keyDefaults)) {
-      if (!state.apiKeys[k]) { state.apiKeys[k] = v; injected.push(k); }
-    }
     for (const [k,v] of Object.entries(apiDefaults)) {
       if (!state.apis[k]) state.apis[k] = v;
     }
-    if (injected.length) { console.log('[Alpha Engine] 기본 API 키 자동 설정: ' + injected.join(', ')); saveState(); }
+    // 키가 없으면 설정 탭에서 직접 입력하도록 안내
+    const missingKeys = ['gemini','claude','perplexity','alpha','groq'].filter(k => !state.apiKeys[k]);
+    if (missingKeys.length) { console.log('[Alpha Engine] API 키 미설정: ' + missingKeys.join(', ') + ' — 설정 탭에서 입력하세요'); }
   } catch(e) {}
 }
 

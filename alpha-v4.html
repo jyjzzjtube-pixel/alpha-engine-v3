@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>ALPHA ENGINE v4.0 - 주식 투자 도우미</title>
+<title>ALPHA ENGINE v5.9 - 주식 투자 도우미</title>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -566,7 +566,7 @@ textarea.input-field { resize: vertical; min-height: 60px; }
 <!-- Header -->
 <div class="header">
   <div>
-    <div class="header-title">ALPHA ENGINE <span class="header-ver">v4.0</span></div>
+    <div class="header-title">ALPHA ENGINE <span class="header-ver">v5.9</span></div>
   </div>
   <div class="header-actions">
     <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">🌙</button>
@@ -1003,22 +1003,14 @@ function loadState() {
       const parsed = JSON.parse(saved);
       state = { ...state, ...parsed };
     }
-    // 기본 API 키 자동 주입 (미설정 시)
-    const keyDefaults = {
-      gemini: ['AIza','SyCs','7QZe','q1xk','b6VG','j0iw','tcYz','r7C_','jElv','NXg'].join(''),
-      perplexity: ['pplx-','DODV8cq9BuQG','i5slSkKkVQf9','fthREzsYH4cl','RYaBkeoOdKjw'].join(''),
-      alpha: '8CEA89VHHEZIOWQY',
-      claude: ['sk-ant-api03-pZS0ER_OL16UaThtXQk0x1','oBT_Hk8XsY8i6WBRbBYh3m1c6rYR6ruu5XwDXEjKSS','DeaGOOe-6xoXugIBKW-HcQ-b4zlwgAA'].join('')
-    };
+    // API 키: localStorage에서 로드 (하드코딩 제거, 사용자 직접 입력)
     const apiDefaults = { gemini:true, perplexity:true, gpt:false, claude:true };
-    let injected = [];
-    for (const [k,v] of Object.entries(keyDefaults)) {
-      if (!state.apiKeys[k]) { state.apiKeys[k] = v; injected.push(k); }
-    }
     for (const [k,v] of Object.entries(apiDefaults)) {
       if (!state.apis[k]) state.apis[k] = v;
     }
-    if (injected.length) { console.log('[Alpha Engine] 기본 API 키 자동 설정: ' + injected.join(', ')); saveState(); }
+    // 키가 없으면 설정 탭에서 직접 입력하도록 안내
+    const missingKeys = ['gemini','claude','perplexity','gpt'].filter(k => !state.apiKeys[k]);
+    if (missingKeys.length) { console.log('[Alpha Engine] API 키 미설정: ' + missingKeys.join(', ') + ' — 설정 탭에서 입력하세요'); }
   } catch(e) {}
 }
 
@@ -1466,11 +1458,20 @@ function deleteRecord(idx) {
 // ==================== COMMAND / CHAT ====================
 let pendingImageBase64 = null;
 
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
 function renderChat() {
   const el = document.getElementById('chatContainer');
-  el.innerHTML = state.chatHistory.map(m =>
-    `<div class="chat-msg ${m.role === 'user' ? 'chat-user' : 'chat-ai'}">${m.content}</div>`
-  ).join('');
+  el.innerHTML = state.chatHistory.map(m => {
+    if (m.role === 'user') {
+      return `<div class="chat-msg chat-user">${escapeHtml(m.content)}</div>`;
+    }
+    return `<div class="chat-msg chat-ai">${escapeHtml(m.content).replace(/\n/g, '<br>')}</div>`;
+  }).join('');
   el.scrollTop = el.scrollHeight;
 }
 
@@ -1644,22 +1645,31 @@ async function callClaude(context, imageData) {
   content.push({ type: 'text', text: context });
   messages.push({ role: 'user', content });
 
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': state.apiKeys.claude,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
-      messages
-    })
-  });
+  let resp;
+  try {
+    resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': state.apiKeys.claude,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 500,
+        messages
+      })
+    });
+  } catch(e) {
+    throw new Error('네트워크 오류: 인터넷 연결을 확인하세요');
+  }
+  if (!resp.ok && resp.status === 401) throw new Error('Claude API 키가 유효하지 않습니다');
+  if (!resp.ok && resp.status === 429) throw new Error('요청 한도 초과. 잠시 후 다시 시도하세요');
+  if (!resp.ok) throw new Error(`Claude HTTP ${resp.status}`);
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message);
+  if (!data.content || !data.content[0]) throw new Error('빈 응답');
   return data.content[0].text;
 }
 
@@ -1672,16 +1682,25 @@ async function callGemini(context, imageData) {
   }
   parts.push({ text: context });
 
-  const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${state.apiKeys.gemini}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts }],
-      generationConfig: { maxOutputTokens: 500 }
-    })
-  });
+  let resp;
+  try {
+    resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${state.apiKeys.gemini}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { maxOutputTokens: 500 }
+      })
+    });
+  } catch(e) {
+    throw new Error('네트워크 오류: 인터넷 연결을 확인하세요');
+  }
+  if (!resp.ok && resp.status === 400) throw new Error('Gemini API 키가 유효하지 않습니다');
+  if (!resp.ok && resp.status === 429) throw new Error('요청 한도 초과. 잠시 후 다시 시도하세요');
+  if (!resp.ok) throw new Error(`Gemini HTTP ${resp.status}`);
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message);
+  if (!data.candidates || !data.candidates[0]) throw new Error('빈 응답');
   return data.candidates[0].content.parts[0].text;
 }
 
@@ -1695,41 +1714,57 @@ async function callGPT(context, imageData) {
   content.push({ type: 'text', text: context });
   messages.push({ role: 'user', content });
 
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${state.apiKeys.gpt}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages,
-      max_tokens: 500
-    })
-  });
+  let resp;
+  try {
+    resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${state.apiKeys.gpt}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages,
+        max_tokens: 500
+      })
+    });
+  } catch(e) {
+    throw new Error('네트워크 오류: 인터넷 연결을 확인하세요');
+  }
+  if (!resp.ok && resp.status === 401) throw new Error('OpenAI API 키가 유효하지 않습니다');
+  if (!resp.ok && resp.status === 429) throw new Error('요청 한도 초과. 잠시 후 다시 시도하세요');
+  if (!resp.ok) throw new Error(`GPT HTTP ${resp.status}`);
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message);
+  if (!data.choices || !data.choices[0]) throw new Error('빈 응답');
   return data.choices[0].message.content;
 }
 
 async function callPerplexity(query) {
-  const resp = await fetch('https://api.perplexity.ai/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${state.apiKeys.perplexity}`
-    },
-    body: JSON.stringify({
-      model: 'sonar',
-      messages: [
-        { role: 'system', content: '한국어로 답변하세요. 주식 관련 최신 뉴스를 쉬운 말로 2-3줄로 요약하세요.' },
-        { role: 'user', content: query + ' 관련 최신 뉴스' }
-      ],
-      max_tokens: 300
-    })
-  });
+  let resp;
+  try {
+    resp = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${state.apiKeys.perplexity}`
+      },
+      body: JSON.stringify({
+        model: 'sonar',
+        messages: [
+          { role: 'system', content: '한국어로 답변하세요. 주식 관련 최신 뉴스를 쉬운 말로 2-3줄로 요약하세요.' },
+          { role: 'user', content: query + ' 관련 최신 뉴스' }
+        ],
+        max_tokens: 300
+      })
+    });
+  } catch(e) {
+    throw new Error('Perplexity 네트워크 오류');
+  }
+  if (!resp.ok) throw new Error(`Perplexity HTTP ${resp.status}`);
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message);
+  if (!data.choices || !data.choices[0]) throw new Error('빈 응답');
   return data.choices[0].message.content;
 }
 
