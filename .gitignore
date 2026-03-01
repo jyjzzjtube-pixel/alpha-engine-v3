@@ -99,6 +99,8 @@ wonwill_app/
 yjtax_v8_extracted/
 auto-program/
 shorts_factory/
+lottery-master-pro/
+yjtax-v8-test/
 bookmarks_*.html
 
 # Log files
@@ -122,6 +124,7 @@ exchange_rate_cache.json
 *.wav
 *.avi
 *.mov
+*.vtt
 
 # Test artifacts
 /test_img_*
